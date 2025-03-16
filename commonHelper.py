@@ -147,6 +147,7 @@ class EIndustry:
 class DBName:
     DB_FINANCEIAL_STATEMENT = "FinancialStatement"
     DB_STOCK = "Stock"
+    DB_NYSE = "NYSE"
 
 
 def getStrFinancialStatementType(type):

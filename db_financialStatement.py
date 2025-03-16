@@ -79,13 +79,12 @@ class DB_FinancialStatement(MySQLConnector):
         return industry_counts
 
 
-
     # 유동부체      -- 단기 지급능력
     # 부채비율      -- 장기 부채 위험 관리
     # FCF         -- 여유 현금 확보
     # OFC         -- 본업으로부터의 지속성 현금창출
     # 순이익        -- 순이익 존재 (적자배제)
-    # 영업이익률     -- 본업 이익률 (최소 10%)
+    # 영업이익률     -- 본업 이익률 (최소 5%)
     # EBITDA 마진  -- 기본 체력 (EBITDA 기준 마진)
     def getCompanyByRiskCheck(self):
                  
@@ -107,8 +106,8 @@ class DB_FinancialStatement(MySQLConnector):
         (df['freeCashflow'] > 0) &
         (df['operatingCashflow'] > 0) &
         (df['netIncomeToCommon'] > 0) &
-        (df['operatingMargins'] > 0.1) &
-        (df['ebitdaMargins'] > 0.1)
+        (df['operatingMargins'] > 0.05) &
+        (df['ebitdaMargins'] > 0.05)
         ].copy()
 
         final_rows = []
@@ -247,7 +246,7 @@ class DB_FinancialStatement(MySQLConnector):
         return result_df
 
 
-
+    # 상장된 기업의 산업들이 몇개가 되는지
     def getCompanyByIndustry(self, industry):
         query = f"""
             SELECT * FROM Company
