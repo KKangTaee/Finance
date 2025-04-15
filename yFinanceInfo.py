@@ -56,3 +56,11 @@ class YFinanceInfo:
                 return self.stock.cash_flow
             elif dateType == ch.EDateType.QUARTER:
                 return self.stock.quarterly_cash_flow
+            
+    # 배당데이터 조회
+    def getDividends(self):
+        return self.stock.actions['Dividends']
+    
+    # 액면분활 조회
+    def getStockSplits(self):
+        return self.stock.actions['Stock Splits']

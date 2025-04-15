@@ -12,6 +12,7 @@ import math
 
 from db_financialStatement import DB_FinancialStatement
 from db_stock import DB_Stock
+from db_nyse import DB_NYSE
 from tqdm import tqdm  # 진행률
 from mysqlConnecter import MySQLConnector
 from yFinanceInfo import YFinanceInfo
@@ -22,6 +23,8 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from bs4 import BeautifulSoup
+
+
 
 
 class DataDownloader:
@@ -149,45 +152,44 @@ class DataDownloader:
     def getStockData(tickers, start=None, end=None):
         """
         여러 종목의 주식 데이터를 가져와서
-        Date, Symbol, Open, High, Low, Close, Volume 형태로 반환하는 함수
+        Date, Symbol, Open, High, Low, Close, Adj Close, Volume 형태로 반환하는 함수
 
         Parameters:
-        tickers (list): 주식 종목들의 리스트
+        tickers (list or str): 주식 종목들의 리스트 또는 단일 종목
         start (str): 시작 날짜 (예: '2023-01-01')
         end (str): 끝 날짜 (예: '2023-12-31')
 
         Returns:
         pd.DataFrame: 정리된 주식 데이터
         """
-
         try:
-            # 데이터 다운로드
-            data = yf.download(tickers, start=start, end=end, group_by='ticker', auto_adjust=True)
+            # auto_adjust=False로 설정해서 Dividends, Stock Splits 등 포함 가능
+            data = yf.download(tickers, start=start, end=end, group_by='ticker', auto_adjust=False)
 
             # 결과를 저장할 빈 데이터프레임
             final_df = pd.DataFrame()
 
-            # 여러 종목이 들어온 경우
             if isinstance(data.columns, pd.MultiIndex):
+                # 여러 종목일 때
                 for ticker in tickers:
-                    if ticker in data.columns.get_level_values(0):  # ✅ ticker 실제 포함 여부 확인
+                    if ticker in data.columns.get_level_values(0):
                         temp_df = data[ticker].copy()
                         temp_df['Symbol'] = ticker
                         temp_df['Date'] = temp_df.index
-                        temp_df = temp_df[['Date', 'Symbol', 'Open', 'High', 'Low', 'Close', 'Volume']]
+                        temp_df = temp_df[['Date', 'Symbol', 'Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume']]
                         final_df = pd.concat([final_df, temp_df], axis=0)
                     else:
                         print(f"[경고] '{ticker}' 데이터 없음 (상장폐지/잘못된 심볼 등)")
             else:
                 # 단일 종목일 때
-                data['Symbol'] = tickers[0]
+                data['Symbol'] = tickers if isinstance(tickers, str) else tickers[0]
                 data['Date'] = data.index
-                final_df = data[['Date', 'Symbol', 'Open', 'High', 'Low', 'Close', 'Volume']].copy()
+                final_df = data[['Date', 'Symbol', 'Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume']].copy()
 
-            # 인덱스 초기화
             final_df.reset_index(drop=True, inplace=True)
+
         except Exception as e:
-            print(f"애러발생! : {e}")
+            print(f"애러 발생! : {e}")
 
         return final_df
 
@@ -263,7 +265,7 @@ class DataDownloader:
 
         # DataFrame을 튜플 리스트로 변환 (adj_close는 Close로 채워넣음)
         data_to_insert = list(
-            df[['Date', 'Symbol', 'Open', 'High', 'Low', 'Close', 'Volume', 'Close']].itertuples(index=False, name=None)
+            df[['Date', 'Symbol', 'Open', 'High', 'Low', 'Close', 'Volume', 'Adj Close']].itertuples(index=False, name=None)
         )
 
         sql = """
@@ -291,6 +293,7 @@ class DataDownloader:
     #--------------------
     # 시계열 가져와 DB에 저장
     #--------------------
+    @staticmethod
     def downloadStockDataAndSaveDB(start=None, end=None, symbols=[], batch_size=100, sleep_sec=5, startIndex=0, endIndex=None):
         """
         주식 데이터를 일정 개수씩 나눠서 다운로드하고 저장하는 함수
@@ -353,6 +356,7 @@ class DataDownloader:
     #--------------------
     # 미국주식 심볼로드
     #--------------------
+    @staticmethod
     def load_nysc_symbol():
         driver = webdriver.Chrome()
         driver.get("https://www.nyse.com/listings_directory/stock")
@@ -388,12 +392,13 @@ class DataDownloader:
                         url = info.select_one("td a")["href"]
                         name = info.select("td")[1].text.strip()
                         data.append([symbol,name,url])
+                    print(f"{soup.select_one('.px-2.text-gray-500').text} 다운완료! len : {len(data)}")
 
                     break
 
                 except Exception as e:
                     print(f"재시도 : {e}")
-                    time.sleep(2)
+                    time.sleep(3)
                     continue
                   
             try:
@@ -417,9 +422,11 @@ class DataDownloader:
                 break
 
         df = pd.DataFrame(data, columns=['symbol', 'name', 'url'])
+        df.dropna(subset=['open', 'high', 'low', 'close', 'volume'], how='all')
         return df
 
 
+    @staticmethod
     def downloadNYSE_SymbolAndSaveDB():
         df = DataDownloader.load_nysc_symbol()
 
@@ -460,6 +467,7 @@ class DataDownloader:
     #--------------------
     # 기업정보 로드하기
     #--------------------
+    @staticmethod
     def save_company_info_to_db(stockInfo, conn):
         try:
             info = stockInfo.stock.info
@@ -526,6 +534,7 @@ class DataDownloader:
 
 
     # 심볼과 함께 실패도 반환
+    @staticmethod
     def process_symbol(symbol):
         try:
             time.sleep(random.uniform(0.5, 1.5))  # 요청 전에 랜덤 대기
@@ -537,13 +546,19 @@ class DataDownloader:
             return symbol, None
 
 
-
+    @staticmethod
     def downloadCompanyInfoAndSaveDB(symbols=[]):
         db = DB_FinancialStatement()
         db.connect()
 
         if len(symbols) == 0:
-            symbols = db.getSymbolList()[150:]
+            symbol_db = DB_NYSE()
+            symbol_db.connect()
+
+            symbols = symbol_db.getSymbolList()
+            
+            symbol_db.disconnect()
+
 
         # for symbol in tqdm(symbols, total=len(symbols), desc="Processing Companies"):
         #     info = YFinanceInfo()

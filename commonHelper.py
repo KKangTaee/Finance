@@ -12,6 +12,8 @@ class EDateType(Enum):
     NONE = 0
     YEAR = 1
     QUARTER = 2
+    MONTHLY = 3
+    DAY = 4
 
 class EIndustry:
     NONE = "none"

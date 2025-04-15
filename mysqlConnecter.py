@@ -49,7 +49,7 @@ class MySQLConnector:
                 df = pd.DataFrame(result)
 
                 if df.empty:
-                    print("⚠️ 데이터가 없습니다.")
+                    print(f"⚠️ 데이터가 없습니다. : {sql}")
                     return df
 
                 if columns is not None:
@@ -68,3 +68,27 @@ class MySQLConnector:
             print(f"⚠️ 알 수 없는 오류 발생: {e}")
             return pd.DataFrame()  # ✅ 오류 발생 시 빈 DataFrame 반환
     
+
+    def commitToDB(self, sql):
+
+        if self.conn is None:
+            print("❌ 데이터베이스 연결이 설정되지 않음.")
+            return pd.DataFrame()  # ✅ 빈 DataFrame 반환
+        
+        conn = self.conn
+
+        try:
+            with conn.cursor() as cursor:
+                
+                cursor.execute(sql)
+                conn.commit()
+
+        except pymysql.err.ProgrammingError as e:
+             print(f"⚠️ SQL 문법 오류: {e}")
+
+        except pymysql.err.OperationalError as e:
+            print(f"⚠️ MySQL 연결 오류: {e}")
+
+        except Exception as e:
+            print(f"⚠️ 알 수 없는 오류 발생: {e}")
+            return pd.DataFrame()  # ✅ 오류 발생 시 빈 DataFrame 반환
