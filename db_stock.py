@@ -1,10 +1,14 @@
+from copyreg import dispatch_table
 from unittest import result
 import pandas as pd
 import numpy as np
 from sklearn.preprocessing import StandardScaler
 
+from IPython.display import display
 from mysqlConnecter import MySQLConnector
 from commonHelper import EDateType, DBName
+from assetAllocation import AssetAllocation
+
 
 class DB_Stock(MySQLConnector):
     def __init__(self):
@@ -310,6 +314,32 @@ class DB_Stock(MySQLConnector):
         result_df = pd.DataFrame(results)
         
         return result_df
+    
+    def get_performance(self, symbols, start_date=None, end_date=None, init_balance = 10000, freq = EDateType.DAY):
+        results = []
+        fail_symbols = []
+
+        for symbol in symbols:
+            try:
+                df = self.getStockData(symbol, start_date, end_date, freq=freq)
+                if df.empty:
+                    fail_symbols.append(symbol)
+                    continue
+                    
+                df.columns = ['Id', 'Date', 'Symbol', 'Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume']
+                display(df)
+                
+
+                df = AssetAllocation.get_performance(df, symbol)
+                results.append(df)
+
+            except Exception as e:
+                print(f"{symbol} 애러발생 : {e}")
+                print(f"fail_symbol : {fail_symbols}")
+                break
+
+        combined_df = pd.concat(results, ignore_index=True)
+        return combined_df
     
     
     # 가중치 전략이긴 한데, 이건 그리 효과가 없는듯
