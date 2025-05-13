@@ -1,4 +1,6 @@
 from enum import Enum
+from datetime import datetime, timedelta
+import pandas as pd
 
 # Enum문
 
@@ -152,6 +154,8 @@ class DBName:
     DB_NYSE = "NYSE"
 
 
+
+
 def getStrFinancialStatementType(type):
     if type == EFinancialStatementType.INCOME_STATEMENT:
         return "IncomeStatement"
@@ -169,3 +173,21 @@ def getStrDateType(type):
         return "Quarter"
     else:
         return None
+    
+
+
+def get_first_and_last_date(date_obj):
+    # datetime 또는 pandas Timestamp 타입이 아닌 경우 변환
+    if not isinstance(date_obj, (datetime, pd.Timestamp)):
+        date_obj = pd.to_datetime(date_obj)
+
+    start = date_obj.replace(day=1)
+
+    if date_obj.month == 12:
+        next_month = date_obj.replace(year=date_obj.year + 1, month=1, day=1)
+    else:
+        next_month = date_obj.replace(month=date_obj.month + 1, day=1)
+
+    end = next_month - timedelta(days=1)
+    
+    return start.date(), end.date()

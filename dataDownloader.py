@@ -23,7 +23,7 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from bs4 import BeautifulSoup
-
+from IPython.display import display
 
 
 class DataDownloader:
@@ -36,27 +36,49 @@ class DataDownloader:
     #--------------------
     def save_fs_to_db(stockInfo, conn, type, dateType): 
         infoName = ch.getStrFinancialStatementType(type)
-        dateName = ch.getStrFinancialStatementType(dateType)
+        dateName = ch.getStrDateType(dateType)
 
         tableName = f"{infoName}_{dateName}"
 
         try:
             df = stockInfo.getFsData(type, dateType)
-            df = df.where(pd.notna(df), None)
+        
+            if df is None:
+                print(f"❌ {tableName} {type} {dateType} 의 df가 비어있습니다.")
 
+            df = df.where(pd.notna(df), None)
             if df.empty:
                 print(f"❌ {tableName} 데이터 없음")
                 return
-            
+
+
             symbol = stockInfo.stock.info.get('symbol','N/A')
             name = stockInfo.stock.info.get('shortName','N/A')
 
             df = df.T
             df.reset_index(inplace=True)
-            df.rename(columns={"index": "date"}, inplace=True)
-            df.columns = [col.replace(' ', '_').replace('-', '_') for col in df.columns]
-            df['symbol'] = symbol
-            df['name'] = name
+            df.rename(columns={"index": "Date"}, inplace=True)
+            df.columns = [col.replace(' ', '').replace('-', '') for col in df.columns]
+            # df.columns = [
+            #     (col[0].lower() + col[1:]) if col and col[0].isupper() else col
+            #     for col in df.columns
+            # ]
+            df['Symbol'] = symbol
+            df['Name'] = name
+
+            # ✅ Company 테이블 존재 여부 확인 및 생성
+            with conn.cursor() as cursor:
+                cursor.execute(f"""
+                    CREATE TABLE IF NOT EXISTS `{tableName}` (
+                        Id INT AUTO_INCREMENT PRIMARY KEY,
+                        Symbol VARCHAR(128),
+                        Date DATE,
+                        Name VARCHAR(128),
+                        UNIQUE KEY unique_symbol_date (Symbol, Date) 
+                    );
+                """)
+                conn.commit()
+
 
             with conn.cursor() as cursor:
                 cursor.execute(f"""
@@ -66,7 +88,7 @@ class DataDownloader:
 
                 existing_columns = {row['COLUMN_NAME'] for row in cursor.fetchall()}
                 
-            new_columns = set(df.columns) - existing_columns - {"symbol", "year"}
+            new_columns = set(df.columns) - existing_columns        
             if new_columns:
                 with conn.cursor() as cursor:
                     for col in new_columns:
@@ -104,8 +126,8 @@ class DataDownloader:
             with conn.cursor() as cursor:
                 columns = ", ".join([f"`{col}`" for col in df.columns])
                 placeholders = ", ".join(["%s"] * len(df.columns))
-                update_clause = ", ".join([f"`{col}` = VALUES(`{col}`)" for col in df.columns if col not in ["date", "symbol"]])
-
+                # update_clause = ", ".join([f"`{col}` = VALUES(`{col}`)" for col in df.columns if col not in ["date", "symbol"]])
+                update_clause = ", ".join([f"`{col}` = VALUES(`{col}`)" for col in df.columns])
                 insert_sql = f"""
                     INSERT INTO {tableName} ({columns})
                     VALUES ({placeholders})
@@ -125,7 +147,7 @@ class DataDownloader:
     #-------------------
     # 재무재표 데이터 저장
     #-------------------
-    def downloadFinancialStatmentAndSaveDB(date, symbols=[]):
+    def downloadFinancialStatmentAndSaveDB(symbols=[], date = ch.EDateType.YEAR):
         db = DB_FinancialStatement()
         db.connect()
         
@@ -137,6 +159,15 @@ class DataDownloader:
         for symbol in tqdm(symbols, desc="Processing Companies"):
             
             info.setCompany(symbol)
+
+            try:
+                stock_info = info.stock.info
+                if not stock_info:
+                    print(f"⚠️ {symbol} - stock.info 비어있음!")
+                    continue
+            except Exception as e:
+                print(f"⚠️ {symbol} - stock.info 가져오기 실패: {e}")
+                continue
 
             DataDownloader.save_fs_to_db(info, db.conn, ch.EFinancialStatementType.INCOME_STATEMENT, date)
             DataDownloader.save_fs_to_db(info, db.conn, ch.EFinancialStatementType.BALANCE_SHEET, date)
@@ -472,6 +503,24 @@ class DataDownloader:
             info = stockInfo.stock.info
             symbol = stockInfo.ticker.upper()  # 주식 심볼 가져오기
 
+            # ✅ Company 테이블 존재 여부 확인 및 생성
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    SELECT COUNT(*) AS count 
+                    FROM information_schema.tables 
+                    WHERE table_schema = DATABASE() AND table_name = 'Company';
+                """)
+                result = cursor.fetchone()
+                if result['count'] == 0:
+                    cursor.execute("""
+                        CREATE TABLE Company (
+                            id INT AUTO_INCREMENT PRIMARY KEY,
+                            symbol VARCHAR(255) UNIQUE
+                        );
+                    """)
+                    conn.commit()
+                    print(f"🆕 Company 테이블 생성 완료")
+
             # ✅ MySQL 테이블 컬럼 리스트 확인
             with conn.cursor() as cursor:
                 cursor.execute("SELECT COLUMN_NAME, DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'Company'")
@@ -559,11 +608,6 @@ class DataDownloader:
             symbol_db.disconnect()
 
 
-        # for symbol in tqdm(symbols, total=len(symbols), desc="Processing Companies"):
-        #     info = YFinanceInfo()
-        #     info.setCompany(symbol)
-        #     DataDownloader.save_company_info_to_db(info, db.conn)
-
         max_workers = min(3, len(symbols))  # 적절한 워커 수 결정 (너무 많은 스레드 방지)
 
         # 병렬 처리
@@ -582,3 +626,16 @@ class DataDownloader:
                     print(f"❌ Error processing {symbol}: {e}")
 
         db.disconnect()
+
+    @staticmethod
+    def downloadCompanyInfoAndSaveDB_V2(symbols:list):
+        with DB_FinancialStatement() as fs:
+            for symbol in symbols:
+                try:
+                    info = DataDownloader.process_symbol(symbol)
+                    if info and info.stock is not None:
+                        DataDownloader.save_company_info_to_db(info, fs.conn)
+                    else:
+                        print(f"🚨 {symbol}: No stock data available.")
+                except Exception as e:
+                    print(f"❌ Error processing {symbol}: {e}")

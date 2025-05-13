@@ -9,8 +9,6 @@ from assetAllocation import AssetAllocation
 from IPython.display import display
 
 
-
-
 class Portfolio:
     def plot_balance_over_time(df):
         """

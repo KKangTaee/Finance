@@ -1,7 +1,13 @@
-import commonHelper as ch
+from functools import reduce
+from assetAllocation import AssetAllocation
+from db_stock import DB_Stock
 from mysqlConnecter import MySQLConnector
+from commonHelper import EFinancialStatementType, EDateType, EIndustry
+from IPython.display import display
+
 import pymysql
 import pandas as pd
+import commonHelper as ch
 
 # 재무재표 DB 데이터 조회
 class DB_FinancialStatement(MySQLConnector):
@@ -79,182 +85,432 @@ class DB_FinancialStatement(MySQLConnector):
         return industry_counts
 
 
-    # 유동부체      -- 단기 지급능력
-    # 부채비율      -- 장기 부채 위험 관리
-    # FCF         -- 여유 현금 확보
-    # OFC         -- 본업으로부터의 지속성 현금창출
-    # 순이익        -- 순이익 존재 (적자배제)
-    # 영업이익률     -- 본업 이익률 (최소 5%)
-    # EBITDA 마진  -- 기본 체력 (EBITDA 기준 마진)
-    def getCompanyByRiskCheck(self):
-                 
-        sql = f"""
-            SELECT * FROM Company
-            WHERE 
-                freeCashflow IS NOT NULL
-                AND operatingCashflow IS NOT NULL
-                AND netIncomeToCommon IS NOT NULL
-                AND operatingMargins IS NOT NULL
-                AND ebitdaMargins IS NOT NULL
-                AND currentRatio IS NOT NULL
-                AND debtToEquity IS NOT NULL
-            """
+    def get_fs(self, symbols:list, type:EFinancialStatementType, dateType: EDateType):
+        if not symbols:
+            return pd.DataFrame()
         
-        df = self.requestToDB(sql)
+        infoName = ch.getStrFinancialStatementType(type)
+        dateName = ch.getStrDateType(dateType)
 
-        filtered_df = df[
-        (df['freeCashflow'] > 0) &
-        (df['operatingCashflow'] > 0) &
-        (df['netIncomeToCommon'] > 0) &
-        (df['operatingMargins'] > 0.05) &
-        (df['ebitdaMargins'] > 0.05)
-        ].copy()
+        symbols_str = ', '.join(f"'{symbol}'" for symbol in symbols)
 
-        final_rows = []
-
-        for _, row in filtered_df.iterrows():
-            sector = row['sector']
-            debt = row['debtToEquity']
-            current = row['currentRatio']
-
-            include = False
-
-            # 업종별 조건 (영어 기준)
-            if sector in ['Financial Services', 'Real Estate']:
-                if debt <= 2.0 and current >= 1.0:
-                    include = True
-            elif sector in ['Industrials', 'Consumer Defensive', 'Consumer Cyclical', 'Basic Materials', 'Energy']:
-                if debt <= 1.0 and current >= 1.5:
-                    include = True
-            elif sector in ['Technology', 'Healthcare', 'Communication Services']:
-                if debt <= 1.5 and current >= 1.2:
-                    include = True
-            elif sector in ['Utilities']:
-                if debt <= 1.5 and current >= 1.0:
-                    include = True
-            else:
-                # 정의되지 않은 업종: 보수적 기준
-                if debt <= 1.0 and current >= 1.5:
-                    include = True
-
-            if include:
-                final_rows.append(row)
-
-        # 최종 필터링된 DataFrame 반환
-        result_df = pd.DataFrame(final_rows)
-
-        return result_df
-
-
-    # trailingPE, forwardPE 로 저평가된 기업 추출
-    # 각 섹터의 중앙값의 1로 설정하고 0.5 ~ 1.5 구간을 추출
-    # trailingPE > forwardPE 이고 forwardPE > 0 추출
-    def getCompanyByComparePE(self):
-        # 1️⃣ 섹터별 중앙값 PE 가져오기
-        sector_avg_df = self.getPESectorMedian()
-        print("✅ 섹터별 PE 중앙값 데이터 가져오기 완료!")
-
-        # ⚙️ 2️⃣ 섹터별 맞춤 배수 설정 (기본은 0.5 ~ 1.5)
-        sector_pe_multipliers = {
-            'Technology': (0, 2),
-            'Healthcare': (0, 2),
-            'Industrials': (0.5, 1.5),
-            'Consumer Cyclical': (0.5, 1.5),
-            'Energy': (0.5, 1.5),
-            'Consumer Defensive': (0.5, 1.5),
-            'Basic Materials': (0.5, 1.5),
-            'Financial Services': (0.75, 1.25),
-            'Real Estate': (0.75, 1.25),
-            'Utilities': (0.75, 1.25)
-        }
-
-        # 성장주 발굴 (리스크 감수)	0 ~ 2 (테크, 헬스케어 등)
-        # 중립적 가치/성장 혼합	0.5 ~ 1.5 (산업재, 소비재, 에너지 등)
-        # 배당+안정 투자 (리스크 최소화)	0.75 ~ 1.25 (리츠, 금융, 유틸리티 등)
-
-        # 3️⃣ 배수 적용해서 섹터별 범위 설정
-        sector_avg_df['trailingPE_min'] = sector_avg_df.apply(
-            lambda row: row['trailingPE'] * sector_pe_multipliers.get(row['sector'], (0.5, 1.5))[0], axis=1)
-        sector_avg_df['trailingPE_max'] = sector_avg_df.apply(
-            lambda row: row['trailingPE'] * sector_pe_multipliers.get(row['sector'], (0.5, 1.5))[1], axis=1)
-        sector_avg_df['forwardPE_min'] = sector_avg_df.apply(
-            lambda row: row['forwardPE'] * sector_pe_multipliers.get(row['sector'], (0.5, 1.5))[0], axis=1)
-        sector_avg_df['forwardPE_max'] = sector_avg_df.apply(
-            lambda row: row['forwardPE'] * sector_pe_multipliers.get(row['sector'], (0.5, 1.5))[1], axis=1)
-
-        print("✅ 섹터별 맞춤 PE 범위 설정 완료!")
-
-        # 4️⃣ Company 테이블 데이터 조회
-        query_all_company = """
-            SELECT symbol, name, sector, industry, trailingPE, forwardPE
-            FROM Company
-            WHERE trailingPE IS NOT NULL
-            AND forwardPE IS NOT NULL
-            AND sector IS NOT NULL
+        query = f"""
+            SELECT *
+            FROM {infoName}_{dateName}
+            WHERE Symbol IN ({symbols_str})
         """
-        company_df = self.requestToDB(query_all_company)
-        print("✅ Company 테이블 전체 데이터 조회 완료!")
 
-        # 5️⃣ 섹터별 구간 필터링
-        filtered_rows = []
+        df = self.requestToDB(query)
 
-        for _, sector_row in sector_avg_df.iterrows():
-            sector_name = sector_row['sector']
-            tpe_min, tpe_max = sector_row['trailingPE_min'], sector_row['trailingPE_max']
-            fpe_min, fpe_max = sector_row['forwardPE_min'], sector_row['forwardPE_max']
+        # 제외할 컬럼
+        exclude_cols = ['Id', 'Symbol', 'Date']
 
-            # 조건에 맞는 row 필터링
-            sector_filtered = company_df[
-                (company_df['sector'] == sector_name) &
-                (company_df['trailingPE'] >= tpe_min) & (company_df['trailingPE'] <= tpe_max) &
-                (company_df['forwardPE'] >= fpe_min) & (company_df['forwardPE'] <= fpe_max)
-            ]
-            filtered_rows.append(sector_filtered)
+        # 제외한 컬럼들만 대상으로 NaN 체크
+        cols_to_check = [col for col in df.columns if col not in exclude_cols]
 
-        # 6️⃣ 모든 필터링된 row 합치기
-        filtered_df = pd.concat(filtered_rows, ignore_index=True)
-        print("✅ 섹터 구간 조건 필터링 완료!")
+        # 실제 삭제
+        df = df.dropna(subset=cols_to_check, how='all')
 
-        # 7️⃣ 추가 조건: trailingPE > forwardPE and forwardPE > 0
-        filtered_df = filtered_df[
-            (filtered_df['trailingPE'] > filtered_df['forwardPE']) &
-            (filtered_df['forwardPE'] > 0)
-        ].copy()
-        print("✅ 추가 조건 (trailingPE > forwardPE, forwardPE > 0) 필터링 완료!")
-
-        # 8️⃣ dropRatioPE (하락률 %) 컬럼 추가
-        filtered_df['dropRatioPE'] = -((filtered_df['trailingPE'] - filtered_df['forwardPE']) / filtered_df['trailingPE']) * 100
-        print("✅ dropRatioPE(하락률 %) 컬럼 추가 완료!")
-
-        # 9️⃣ 하락률 기준 정렬
-        filtered_df = filtered_df.sort_values(by='dropRatioPE', ascending=True).reset_index(drop=True)
-        print("✅ 하락률 순 정렬 완료!")
-
-        return filtered_df
+        return df
     
 
-    # 각 섹터별 trailingPE, forwardPE 의 중앙값을 구함
-    # PER 같은 벨류에이션 지표에서는 중앙값보다 평균값을 사용하는 것이 더 효율적임
-    def getPESectorMedian(self):
-        query= """
-             SELECT industry, sector, trailingPE, forwardPE FROM Company
-        """
-        df = self.requestToDB(query)
+    def get_fs_all(self, symbols:list, dateType:EDateType):
+        
+        if not symbols:
+            return pd.DataFrame()
+        
+        is_df = self.get_fs(symbols, EFinancialStatementType.INCOME_STATEMENT, dateType)
+        bs_df = self.get_fs(symbols, EFinancialStatementType.BALANCE_SHEET, dateType)
+        cf_df = self.get_fs(symbols, EFinancialStatementType.CASH_FLOW, dateType)
 
-        result_df = df.groupby(['sector'], as_index=False)[["trailingPE", "forwardPE"]].median()
+        is_df = is_df.drop(columns=['Id'])
+        bs_df = bs_df.drop(columns=['Id'])
+        cf_df = cf_df.drop(columns=['Id'])
 
-        return result_df
+        dfs = [is_df, bs_df, cf_df]
+        merged = reduce(lambda left, right: pd.merge(left, right, on=['Symbol', 'Date', 'Name'], how='outer'), dfs)
+
+        return merged
+    
+
+    # 시총구하기
+    def get_marketCap(self, df):
+
+        df = df.copy()
+        df['MarketCap'] = None
+        
+        for idx in range(len(df)):
+            date = df.at[idx, 'Date']
+            symbol = df.at[idx,'Symbol']
+            ordinarySharesNumber = df.at[idx, 'OrdinarySharesNumber'] # 보통주 발행
+
+            first_date, last_date = ch.get_first_and_last_date(date)
+
+            with DB_Stock() as stock:
+                stock_df = stock.getStockData(symbol,first_date, last_date)
+                symbol_dfs = AssetAllocation.filter_close_last_month({symbol:stock_df})
+
+                close = symbol_dfs[symbol].at[0, 'Close']
+                market_cap = ordinarySharesNumber*close
+                df.at[idx, 'MarketCap'] = market_cap
+
+        return df
+    
+
+    # PSR
+    # 주가가 매출에비해 얼마나 높은지를 평가함
+    # PSR < 1 저평가 가능성
+
+    def get_psr(self, df:pd.DataFrame):
+
+        if 'MarketCap' not in df.columns:
+            return
+        
+        if 'TotalRevenue' not in df.columns: # 매출액
+            return
+        
+        df = df.copy()
+        df['PSR'] = None
+
+        for idx in range(len(df)):
+            marketCap = df.at[idx,'MarketCap']
+            totalRevenue = df.at[idx, 'TotalRevenue']
+            
+            df.at[idx, 'PSR'] = marketCap/totalRevenue
+        
+        return df
+    
+    # GP/A
+    # 기업이 자산을 활용해 얼마나 효율적으로 매출총이익을 창출하는지 평가하는 지표
+    # 높은 GP/A : 자산 대비 매출총이익이 높아 자산 효율성이 우수. 즉, 적은자산으로 높은이익을 창출
+    def get_gp_a(self, df:pd.DataFrame):
+
+        if 'GrossProfit' not in df.columns:
+            return
+        
+        if 'TotalAssets' not in df.columns:
+            return
+        
+        df = df.copy()
+        df['GP/A'] = None
+
+        for idx in range(len(df)):
+            grossProfit = df.at[idx,'GrossProfit']
+            totalAssets = df.at[idx, 'TotalAssets']
+
+            df.at[idx, 'GP/A'] = grossProfit/totalAssets
+
+        return df
+        
+
+    # POR
+    # 주가가 기업의 영업활동으로 창출된 이익에 비해 얼마나 높은지 평가하는 가치 지표
+    def get_por(self, df:pd.DataFrame):
+
+        if 'MarketCap' not in df.columns:
+            return
+        
+        if 'OperatingIncome' not in df.columns:
+            return
+
+        df = df.copy()
+        df['POR'] = None
+
+        for idx in range(len(df)):
+            grossProfit = df.at[idx,'MarketCap']
+            totalAssets = df.at[idx, 'OperatingIncome']
+
+            df.at[idx, 'POR'] = grossProfit/totalAssets
+
+        return df
+    
+
+    # EV/EVIT
+    # 시가총액 + 총부채 - 현금 및 현금성 자산 = EV(기업가치)
+    # EVIT는 세전이익을 말함. 그래서 기업가치를 세전이익으로 나눈것을 말한다.
+    def get_ev_ebti(self, df: pd.DataFrame):
+        # 필수 컬럼 확인
+        required_columns = ['MarketCap', 'TotalDebt', 'CashCashEquivalentsAndShortTermInvestments', 'EBIT']
+        for col in required_columns:
+            if col not in df.columns:
+                return None
+        
+        # DataFrame 복사
+        df = df.copy()
+        df['EV/EBIT'] = None
+
+        # 각 행에 대해 EV/EBIT 계산
+        for idx in range(len(df)):
+            # 기업가치(EV) 계산: MarketCap + TotalDebt - CashCashEquivalentsAndShortTermInvestments
+            market_cap = df.at[idx, 'MarketCap']
+            total_debt = df.at[idx, 'TotalDebt']
+            cash = df.at[idx, 'CashCashEquivalentsAndShortTermInvestments']
+            ebit = df.at[idx, 'EBIT']
+
+            # EV 계산
+            enterprise_value = market_cap + total_debt - cash
+
+            # EBIT가 0 또는 음수면 EV/EBIT 계산 불가 (None 유지)
+            # if ebit > 0:
+            df.at[idx, 'EV/EBIT'] = enterprise_value / ebit
+
+        return df
+    
+    # PER
+    # 시총분에 순이익을 나눈 것
+    def get_per(self, df: pd.DataFrame):
+        # 필수 컬럼 확인
+        required_columns = ['MarketCap', 'NetIncome']
+        for col in required_columns:
+            if col not in df.columns:
+                return None
+        
+        # DataFrame 복사
+        df = df.copy()
+        df['PER'] = None
+
+        # 각 행에 대해 PER 계산
+        for idx in range(len(df)):
+            market_cap = df.at[idx, 'MarketCap']
+            net_income = df.at[idx, 'NetIncome']
+
+            # NetIncome이 0 또는 음수면 PER 계산 불가 (None 유지)
+            # if net_income > 0:
+            df.at[idx, 'PER'] = market_cap / net_income
+
+        return df
+    
+
+    # 청산가치
+    # 유동자산 - 부채총계 = 청산가치
+    # 청산가치는 기업이 청산 시 주주에게 남을 수 있는 가치를 나타냄.
+    # 시가총액보다 높으면 주식 수익률이 높을 가능성이 있음.
+    def get_liquidation_value(self, df: pd.DataFrame):
+        # 필수 컬럼 확인
+        required_columns = ['CurrentAssets', 'TotalLiabilitiesNetMinorityInterest', 'MarketCap']
+        for col in required_columns:
+            if col not in df.columns:
+                return None
+        
+        # DataFrame 복사
+        df = df.copy()
+        df['LiquidationValue'] = None
+        df['IsLiquidationValueHigher'] = None
+
+        # 각 행에 대해 청산가치 계산
+        for idx in range(len(df)):
+            current_assets = df.at[idx, 'CurrentAssets']
+            total_liabilities = df.at[idx, 'TotalLiabilitiesNetMinorityInterest']
+            market_cap = df.at[idx, 'MarketCap']
+
+            # 청산가치 계산
+            liquidation_value = current_assets - total_liabilities
+            df.at[idx, 'LiquidationValue'] = liquidation_value
+        
+        return df
+    
+
+    # 유동비율
+    # 유동자산 / 유동부채 = 유동비율
+    def get_current_ratio(self, df: pd.DataFrame):
+        # 필수 컬럼 확인
+        required_columns = ['CurrentAssets', 'CurrentLiabilities']
+        for col in required_columns:
+            if col not in df.columns:
+                return None
+        
+        # DataFrame 복사
+        df = df.copy()
+        df['CurrentRatio'] = None
+
+        # 각 행에 대해 유동비율 계산
+        for idx in range(len(df)):
+            current_assets = df.at[idx, 'CurrentAssets']
+            current_liabilities = df.at[idx, 'CurrentLiabilities']
+
+            # 유동부채가 0이 아니면 유동비율 계산
+            if current_liabilities is not None and current_liabilities > 0:
+                df.at[idx, 'CurrentRatio'] = current_assets / current_liabilities
+
+        return df
+    
+
+    # PBR
+    # 시가총액 / 순자산 = PBR
+    # PBR이 낮은 기업은 주가가 장부가치 대비 저평가되어있음
+    def get_pbr(self, df: pd.DataFrame):
+        # 필수 컬럼 확인
+        required_columns = ['MarketCap', 'StockholdersEquity']
+        for col in required_columns:
+            if col not in df.columns:
+                return None
+        
+        # DataFrame 복사
+        df = df.copy()
+        df['PBR'] = None
+
+        # 각 행에 대해 PBR 계산
+        for idx in range(len(df)):
+            market_cap = df.at[idx, 'MarketCap']
+            stockholders_equity = df.at[idx, 'StockholdersEquity']
+
+            # 순자산이 0보다 크면 PBR 계산
+            if stockholders_equity is not None and stockholders_equity > 0:
+                df.at[idx, 'PBR'] = market_cap / stockholders_equity
+
+        return df
+    
+
+    # 차입금비율
+    # 차입금비율이 개선되가나, 영업기익이 차입금 대비 성장하는 기업은 주식수익률이 높다.
+    def get_debt_to_equity_ratio(self, df: pd.DataFrame):
+        # 필수 컬럼 확인
+        required_columns = ['TotalDebt', 'TotalCapitalization']
+        for col in required_columns:
+            if col not in df.columns:
+                return None
+        
+        # DataFrame 복사
+        df = df.copy()
+        df['DebtToEquityRatio'] = None
+
+        # 각 행에 대해 차입금비율 및 영업이익/차입금 비율 계산
+        for idx in range(len(df)):
+            total_debt = df.at[idx, 'TotalDebt']
+            total_capitalization = df.at[idx, 'TotalCapitalization']
+
+            # 차입금비율 계산 (TotalCapitalization > 0)
+            if total_capitalization is not None and total_capitalization > 0:
+                df.at[idx, 'DebtToEquityRatio'] = total_debt / total_capitalization
+
+        return df
+    
+
+    def get_pcr(self, df: pd.DataFrame):
+        # 필수 컬럼 확인
+        required_columns = ['MarketCap', 'OperatingCashFlow']
+        for col in required_columns:
+            if col not in df.columns:
+                return None
+        
+        # DataFrame 복사
+        df = df.copy()
+        df['PCR'] = None
+
+        # 각 행에 대해 PCR 계산
+        for idx in range(len(df)):
+            market_cap = df.at[idx, 'MarketCap']
+            operating_cash_flow = df.at[idx, 'OperatingCashFlow']
+
+            # OperatingCashFlow가 0보다 크면 PCR 계산
+            if operating_cash_flow is not None and operating_cash_flow > 0:
+                df.at[idx, 'PCR'] = market_cap / operating_cash_flow
+
+        return df
+    
+
+    def get_pfcr(self, df: pd.DataFrame):
+        # 필수 컬럼 확인
+        required_columns = ['MarketCap', 'OperatingCashFlow', 'CapitalExpenditure']
+        for col in required_columns:
+            if col not in df.columns:
+                return None
+        
+        # DataFrame 복사
+        df = df.copy()
+        df['PFCR'] = None
+
+        # 각 행에 대해 PFCR 계산
+        for idx in range(len(df)):
+            market_cap = df.at[idx, 'MarketCap']
+            operating_cash_flow = df.at[idx, 'OperatingCashFlow']
+            capital_expenditure = df.at[idx, 'CapitalExpenditure']
+
+            # 잉여현금흐름 계산 (CapitalExpenditure는 음수로 기록될 수 있음)
+            free_cash_flow = operating_cash_flow - (capital_expenditure if capital_expenditure is not None else 0)
+
+            # FreeCashFlow가 0보다 크면 PFCR 계산
+            if free_cash_flow is not None and free_cash_flow > 0:
+                df.at[idx, 'PFCR'] = market_cap / free_cash_flow
+
+        return df
+    
+
+    # 배당성향
+    def get_dividend_payout_ratio(self, df: pd.DataFrame):
+        # 필수 컬럼 확인
+        required_columns = ['CommonStockDividendPaid', 'NetIncome']
+        for col in required_columns:
+            if col not in df.columns:
+                return None
+        
+        # DataFrame 복사
+        df = df.copy()
+        df['DividendPayoutRatio'] = None
+
+        # 각 행에 대해 배당성향 계산
+        for idx in range(len(df)):
+            dividend_paid = df.at[idx, 'CommonStockDividendPaid']
+            net_income = df.at[idx, 'NetIncome']
+
+            # 배당금은 음수(지출)로 기록될 수 있으므로 절댓값 사용
+            # NetIncome이 0보다 크고, 배당금이 0보다 크면 배당성향 계산
+            if (net_income is not None and net_income > 0 and 
+                dividend_paid is not None and dividend_paid < 0):  # 음수로 기록된 배당금
+                df.at[idx, 'DividendPayoutRatio'] = abs(dividend_paid) / net_income
+
+        return df
+    
+
+    def get_sector(self, df:pd.DataFrame):
+
+        df['Sector'] = None
+        for idx in range(len(df)):
+            symbol = df.at[idx, 'Symbol']
+
+            query = f"""SELECT Sector 
+                      FROM Company 
+                      Where Symbol ='{symbol}';"""
+            sector_df = self.requestToDB(query)
+            display(sector_df)
+            df.at[idx,'Sector'] = sector_df.iloc[0]['Sector']
+
+        return df
+    
+
+    # 
+    def get_income_growth(self, df:pd.DataFrame) -> pd.DataFrame:
+        
+        if 'OperatingIncome' not in df.columns:
+            return None
+        
+        df = df.copy()
+        df = df.sort_values(by=['Symbol','Date'], ascending=True)
+        df['IncomeGrowth'] = None
 
 
-    # 상장된 기업의 산업들이 몇개가 되는지
-    def getCompanyByIndustry(self, industry):
-        query = f"""
-            SELECT * FROM Company
-            WHERE industry = '{industry}'
+        for idx in range(len(df)):
+            
+            if idx == 0:
+                continue
 
-        """
-        df = self.requestToDB(query)
+            prev_income = df.at[idx-1, 'OperatingIncome']
+            curr_income = df.at[idx, 'OperatingIncome']
+            ratio = ((curr_income - prev_income)/prev_income).round(2)
+
+            df.at[idx, 'IncomeGrowth'] = ratio
 
         return df
 
-    
+# 11개 섹터
+# Technology
+# Financial Services
+# Consumer Cyclical
+# Healthcare
+# Communication Services
+# Industrials
+# Consumer Defensive
+# Energy
+# Basic Materials
+# Real Estate
+# Utilities

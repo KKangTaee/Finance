@@ -5,6 +5,7 @@ import numpy as np
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 from time import strptime
+from IPython.display import display
 
 pd.set_option('display.max_rows', None)  # 모든 행 출
 pd.set_option('display.max_columns', None)  # 모든 열 출력
@@ -181,8 +182,11 @@ class AssetAllocation:
         result_dfs = {}
 
         for symbol, df_symbol in symbol_dfs.items():
+            # ✅ 'Date'가 datetime 타입이 아니면 변환
+            if not pd.api.types.is_datetime64_any_dtype(df_symbol['Date']):
+                df_symbol['Date'] = pd.to_datetime(df_symbol['Date'], errors='coerce')
+
             monthly_df = df_symbol.groupby(df_symbol['Date'].dt.to_period('M')).apply(lambda x: x.iloc[-1]).reset_index(drop=True)
-            
             result_dfs[symbol] = monthly_df
         
         return result_dfs
@@ -274,7 +278,7 @@ class AssetAllocation:
         monthly_returns = balance_series.pct_change().dropna()
 
         # 무위험 수익률 가정 (연 2%를 월간으로 환산)
-        risk_free_rate = 0.02 / 12
+        risk_free_rate = 0.03 / 12
 
         # 연간화된 표준 편차 계산
         annualized_std_dev = monthly_returns.std() * np.sqrt(12)

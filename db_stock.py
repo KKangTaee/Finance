@@ -5,6 +5,7 @@ import numpy as np
 from sklearn.preprocessing import StandardScaler
 
 from IPython.display import display
+import assetAllocation
 from mysqlConnecter import MySQLConnector
 from commonHelper import EDateType, DBName
 from assetAllocation import AssetAllocation
@@ -279,64 +280,63 @@ class DB_Stock(MySQLConnector):
 
     def calculate_final_investment(self, df, start_amount):
         return self.calculate_annual_summary_by_close(df)['Balance'].iloc[-1]    
-
-    def getPerformanceSummary(self, symbols, start=None, end=None, start_amount = 10000, freq = EDateType.DAY):
-        results = []
-        fail_symbols = []
-
-        for symbol in symbols:
-            try:
-                df = self.getStockData(symbol, start, end, freq=freq)
-                if df.empty:
-                    fail_symbols.append(symbol)
-                    continue
-
-                mdd_series = self.calculate_mdd(df)['Drawdown']
-                mdd_value = mdd_series.iloc[0] if isinstance(mdd_series, pd.Series) else mdd_series
-
-                result = {
-                    'Symbol': symbol,
-                    'Start Balance': start_amount,
-                    'End Balance': self.calculate_final_investment(df, start_amount),
-                    'MDD': mdd_value,  # 최대 낙폭 (MDD)
-                    'CAGR': self.calculate_cagr(df),  # 연평균 복리 수익률
-                    'Standard Deviation': self.calculate_stdev(df, freq=freq),  # 표준편차
-                    'Sharpe Ratio': self.calculate_sharpe_ratio(df, freq=freq)  # 샤프 비율
-                }
-                
-                results.append(result)
-            except Exception as e:
-                print(f"{symbol} 애러발생 : {e}")
-                print(f"fail_symbol : {fail_symbols}")
-                break
-
-        # 리스트를 데이터프레임으로 변환
-        result_df = pd.DataFrame(results)
-        
-        return result_df
     
+
+    # 얼마를 넣었을 때 수익률을 구하기
+    def get_balance(self, df, init_balance):
+        df.columns = ['Id', 'Date', 'Symbol', 'Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume']
+        df = df.dropna(subset=['Open', 'High', 'Low', 'Close', 'Volume'], how='all') 
+
+        # 수익률 구하기
+        df['Balance'] = None
+        df['Profit Ratio'] = None
+        for idx in range(len(df)):
+            if idx == 0:
+                df.at[idx, 'Balance'] = init_balance
+            else:
+                prev_close = df.at[idx-1, 'Close']
+                prev_balance = df.at[idx-1, 'Balance']            
+                ratio = ((df.at[idx, 'Close'] - prev_close)/prev_close)
+
+                df.at[idx, 'Profit Ratio'] = (ratio * 100).round(2)
+                df.at[idx, 'Balance'] =  int(prev_balance *(1+ratio))
+
+        return df
+
+
+
     def get_performance(self, symbols, start_date=None, end_date=None, init_balance = 10000, freq = EDateType.DAY):
         results = []
         fail_symbols = []
-
+        
+        # 딕셔너리 형태로 만듬
+        symbol_dfs = {}
         for symbol in symbols:
             try:
                 df = self.getStockData(symbol, start_date, end_date, freq=freq)
                 if df.empty:
                     fail_symbols.append(symbol)
                     continue
-                    
-                df.columns = ['Id', 'Date', 'Symbol', 'Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume']
-                display(df)
-                
 
-                df = AssetAllocation.get_performance(df, symbol)
-                results.append(df)
+                # 이름명 변경
+                df.columns = ['Id', 'Date', 'Symbol', 'Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume']
+                df = df.dropna(subset=['Open', 'High', 'Low', 'Close', 'Volume'], how='all') 
+                
+                symbol_dfs[symbol] = df
 
             except Exception as e:
                 print(f"{symbol} 애러발생 : {e}")
                 print(f"fail_symbol : {fail_symbols}")
                 break
+
+        # 월말 데이터만 추출
+        symbol_dfs = AssetAllocation.filter_close_last_month(symbol_dfs)
+        for symbol, df in symbol_dfs.items():
+            df = self.get_balance(df, init_balance)
+            display(df)
+            df = AssetAllocation.get_performance(df, symbol)
+            results.append(df)
+
 
         combined_df = pd.concat(results, ignore_index=True)
         return combined_df

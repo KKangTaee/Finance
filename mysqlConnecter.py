@@ -5,6 +5,13 @@ class MySQLConnector:
     def __init__(self):
         pass
 
+    def __enter__(self):
+        self.connect()
+        return self  # 연결된 인스턴스를 리턴
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.disconnect()
+
     def connect(self, dbName):
         try:
             self.conn = pymysql.connect(
@@ -15,6 +22,7 @@ class MySQLConnector:
                     charset='utf8mb4',
                     cursorclass=pymysql.cursors.DictCursor
                 )
+            self.dbName = dbName
         except Exception as e:
              print(f"⚠️ MySQL 연결 실패: {e}")
              self.conn = None
@@ -92,3 +100,40 @@ class MySQLConnector:
         except Exception as e:
             print(f"⚠️ 알 수 없는 오류 발생: {e}")
             return pd.DataFrame()  # ✅ 오류 발생 시 빈 DataFrame 반환
+        
+
+    def rename_columns_to_capitalize(self, table_names):
+        try:
+            with self.conn.cursor() as cursor:
+                for table_name in table_names:
+                    print(f"\n[처리 중] 테이블: {table_name}")
+
+                    # 1. 컬럼 이름 가져오기
+                    cursor.execute(f"""
+                        SELECT COLUMN_NAME
+                        FROM INFORMATION_SCHEMA.COLUMNS
+                        WHERE TABLE_SCHEMA = %s
+                            AND TABLE_NAME = %s;
+                    """, (self.dbName, table_name))
+                    
+                    result = cursor.fetchall()
+                    columns = [row['COLUMN_NAME'] for row in result]
+
+                    # 2. ALTER 쿼리 생성 및 실행
+                    for col in columns:
+                        new_col = col[0].upper() + col[1:]
+                        if col != new_col:
+                            alter_query = f"""
+                                ALTER TABLE `{table_name}` 
+                                RENAME COLUMN `{col}` TO `{new_col}`;
+                            """
+                            print(f"  실행: {alter_query.strip()}")
+                            cursor.execute(alter_query)
+
+            # 전체 커밋
+            self.conn.commit()
+            print("\n✅ 모든 테이블 컬럼 이름 변경 완료!")
+
+        except Exception as e:
+            print(f"❗에러 발생: {e}")
+            self.conn.rollback()
