@@ -6,6 +6,7 @@ from datetime import datetime
 from dateutil.relativedelta import relativedelta
 from time import strptime
 from IPython.display import display
+from curl_cffi import requests
 
 pd.set_option('display.max_rows', None)  # 모든 행 출
 pd.set_option('display.max_columns', None)  # 모든 열 출력
@@ -40,8 +41,9 @@ class AssetAllocation:
         
         result_dfs = {}
         
+        session = requests.Session(impersonate="safari15_5")
         # 로딩하는건 progress = False 하면 해제됨
-        df = yf.download(tickers=symbols, start=start_date, end=end_date, progress=False, auto_adjust=False)
+        df = yf.download(tickers=symbols, session= session, start=start_date, end=end_date, progress=False, auto_adjust=False)
 
         # 배당 데이터 가져오기
         dividends_dfs = AssetAllocation.get_dividends(symbols= symbols)

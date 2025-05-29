@@ -139,17 +139,17 @@ class Portfolio:
 
     def show_portfolio():
         start_date = '2013-12-01'
-        end_date = '2025-04-21'
+        end_date = '2025-05-14'
         allocations = [
             {'Harry Brown': Portfolio.harry_browne_permanent_portfolio(start_date, end_date)},
-            #{'Ray Dailo' : Portfolio.ray_dalio_all_seasons(start_date, end_date)},
+            {'Ray Dailo' : Portfolio.ray_dalio_all_seasons(start_date, end_date)},
             {'GAA3': Portfolio.gtaa3(start_date, end_date)},
-            #{'Original DM': Portfolio.original_dual_momentum(start_date, end_date)},
-            #{'Composite DM': Portfolio.composite_dual_momentum(start_date, end_date)},
-            #{'PAA' : Portfolio.paa(start_date, end_date)},
-            #{'VAA_A': Portfolio.vaa_aggressive(start_date, end_date)},
-            #{'VAA_B': Portfolio.vaa_balance(start_date, end_date)},
-            #{'DAA': Portfolio.daa(start_date, end_date)},
+            {'Original DM': Portfolio.original_dual_momentum(start_date, end_date)},
+            {'Composite DM': Portfolio.composite_dual_momentum(start_date, end_date)},
+            {'PAA' : Portfolio.paa(start_date, end_date)},
+            {'VAA_A': Portfolio.vaa_aggressive(start_date, end_date)},
+            {'VAA_B': Portfolio.vaa_balance(start_date, end_date)},
+            {'DAA': Portfolio.daa(start_date, end_date)},
         ]
 
         Portfolio.plot_multiple_balances_over_time([list(d.values())[0] for d in allocations],

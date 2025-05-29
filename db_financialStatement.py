@@ -8,6 +8,7 @@ from IPython.display import display
 import pymysql
 import pandas as pd
 import commonHelper as ch
+import numpy as np
 
 # 재무재표 DB 데이터 조회
 class DB_FinancialStatement(MySQLConnector):
@@ -19,6 +20,47 @@ class DB_FinancialStatement(MySQLConnector):
 
     def disconnect(self):
         super().disconnect()
+
+
+    def get_company(self, symbols: list):
+        # 심볼 리스트가 비어있으면 빈 DataFrame 반환
+        if not symbols:
+            return pd.DataFrame()
+
+        # 각 심볼을 작은 따옴표로 감싸서 SQL-safe한 문자열 생성
+        formatted_symbols = ', '.join(f"'{symbol}'" for symbol in symbols)
+
+        # 쿼리 문자열 생성 (주의: 직접 문자열 삽입이므로 반드시 escape 필요)
+        query = f"""
+            SELECT * FROM Company WHERE symbol IN ({formatted_symbols})
+        """
+        df = super().requestToDB(query)
+        return df
+    
+
+
+    def get_symbols_data_existence(self, symbols: list):
+        if not symbols:
+            return pd.DataFrame()
+
+        base_query = """
+            SELECT s.symbol,
+                EXISTS (SELECT 1 FROM IncomeStatement_Year     i WHERE i.symbol = s.symbol) AS has_ISY,
+                EXISTS (SELECT 1 FROM IncomeStatement_Quarter  i WHERE i.symbol = s.symbol) AS has_ISQ,
+                EXISTS (SELECT 1 FROM BalanceSheet_Year        b WHERE b.symbol = s.symbol) AS has_BSY,
+                EXISTS (SELECT 1 FROM BalanceSheet_Quarter     b WHERE b.symbol = s.symbol) AS has_BSQ,
+                EXISTS (SELECT 1 FROM CashFlow_Year            c WHERE c.symbol = s.symbol) AS has_CFY,
+                EXISTS (SELECT 1 FROM CashFlow_Quarter         c WHERE c.symbol = s.symbol) AS has_CFQ
+            FROM (
+                {symbol_union}
+            ) AS s
+        """
+
+        symbol_union = ' UNION ALL '.join(f"SELECT '{symbol.strip()}' AS symbol" for symbol in symbols)
+        full_query = base_query.format(symbol_union=symbol_union)
+        df = super().requestToDB(full_query)
+        return df
+    
 
 
     #---------------------
@@ -135,24 +177,28 @@ class DB_FinancialStatement(MySQLConnector):
 
     # 시총구하기
     def get_marketCap(self, df):
-
         df = df.copy()
         df['MarketCap'] = None
-        
+
         for idx in range(len(df)):
             date = df.at[idx, 'Date']
-            symbol = df.at[idx,'Symbol']
-            ordinarySharesNumber = df.at[idx, 'OrdinarySharesNumber'] # 보통주 발행
+            symbol = df.at[idx, 'Symbol']
+            ordinarySharesNumber = df.at[idx, 'OrdinarySharesNumber']
 
             first_date, last_date = ch.get_first_and_last_date(date)
 
             with DB_Stock() as stock:
-                stock_df = stock.getStockData(symbol,first_date, last_date)
-                symbol_dfs = AssetAllocation.filter_close_last_month({symbol:stock_df})
-
-                close = symbol_dfs[symbol].at[0, 'Close']
-                market_cap = ordinarySharesNumber*close
-                df.at[idx, 'MarketCap'] = market_cap
+                try:
+                    stock_df = stock.getStockData(symbol, first_date, last_date)
+                    symbol_dfs = AssetAllocation.filter_close_last_month({symbol: stock_df})
+                
+                    close = symbol_dfs[symbol].at[0, 'Close']
+                    market_cap = ordinarySharesNumber * close
+                    df.at[idx, 'MarketCap'] = market_cap
+                except Exception as e:
+                    print(f"[ERROR] Market cap 계산 중 예외 발생: {e}")
+                    # 주가 데이터가 존재하지 않을 경우 NaN으로 유지
+                    df.at[idx, 'MarketCap'] = np.nan
 
         return df
     
@@ -176,7 +222,10 @@ class DB_FinancialStatement(MySQLConnector):
             marketCap = df.at[idx,'MarketCap']
             totalRevenue = df.at[idx, 'TotalRevenue']
             
-            df.at[idx, 'PSR'] = marketCap/totalRevenue
+            if totalRevenue and totalRevenue != 0:
+                df.at[idx, 'PSR'] = marketCap / totalRevenue
+            else:
+                df.at[idx, 'PSR'] = np.nan
         
         return df
     
@@ -198,6 +247,10 @@ class DB_FinancialStatement(MySQLConnector):
             grossProfit = df.at[idx,'GrossProfit']
             totalAssets = df.at[idx, 'TotalAssets']
 
+            # 예외 처리: 값이 None이거나 NaN일 경우 계산 생략
+            if pd.isna(grossProfit) or pd.isna(totalAssets) or totalAssets == 0:
+                continue
+            
             df.at[idx, 'GP/A'] = grossProfit/totalAssets
 
         return df
@@ -217,10 +270,10 @@ class DB_FinancialStatement(MySQLConnector):
         df['POR'] = None
 
         for idx in range(len(df)):
-            grossProfit = df.at[idx,'MarketCap']
+            marketCap = df.at[idx,'MarketCap']
             totalAssets = df.at[idx, 'OperatingIncome']
 
-            df.at[idx, 'POR'] = grossProfit/totalAssets
+            df.at[idx, 'POR'] = marketCap/totalAssets
 
         return df
     
@@ -276,7 +329,10 @@ class DB_FinancialStatement(MySQLConnector):
 
             # NetIncome이 0 또는 음수면 PER 계산 불가 (None 유지)
             # if net_income > 0:
-            df.at[idx, 'PER'] = market_cap / net_income
+            if net_income and net_income != 0:
+                df.at[idx, 'PER'] = market_cap / net_income
+            else:
+                df.at[idx, 'PER'] = np.nan
 
         return df
     
@@ -472,7 +528,6 @@ class DB_FinancialStatement(MySQLConnector):
                       FROM Company 
                       Where Symbol ='{symbol}';"""
             sector_df = self.requestToDB(query)
-            display(sector_df)
             df.at[idx,'Sector'] = sector_df.iloc[0]['Sector']
 
         return df
@@ -501,16 +556,104 @@ class DB_FinancialStatement(MySQLConnector):
             df.at[idx, 'IncomeGrowth'] = ratio
 
         return df
+    
+    def get_gross_profit_margin(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        매출총이익률 (Gross Profit Margin) = GrossProfit / Revenue
+        Revenue 컬럼은 TotalRevenue 또는 OperatingRevenue 중 하나가 필요함.
+        """
+        
+        # 필요한 컬럼 확인
+        required_columns = ['GrossProfit', 'TotalRevenue', 'OperatingRevenue']
+        if not any(col in df.columns for col in required_columns):
+            return None
 
-# 11개 섹터
-# Technology
-# Financial Services
-# Consumer Cyclical
-# Healthcare
-# Communication Services
-# Industrials
-# Consumer Defensive
-# Energy
-# Basic Materials
-# Real Estate
-# Utilities
+        df = df.copy()
+        df['Revenue'] = None
+        df['GrossProfitMargin'] = None
+
+        # Revenue 설정 우선순위: TotalRevenue > OperatingRevenue
+        for idx in range(len(df)):
+            if 'TotalRevenue' in df.columns and pd.notnull(df.at[idx, 'TotalRevenue']):
+                df.at[idx, 'Revenue'] = df.at[idx, 'TotalRevenue']
+            elif 'OperatingRevenue' in df.columns and pd.notnull(df.at[idx, 'OperatingRevenue']):
+                df.at[idx, 'Revenue'] = df.at[idx, 'OperatingRevenue']
+            else:
+                continue  # 둘 다 없으면 넘어감
+
+            gross_profit = df.at[idx, 'GrossProfit']
+            revenue = df.at[idx, 'Revenue']
+
+            if gross_profit is not None and revenue and revenue != 0:
+                df.at[idx, 'GrossProfitMargin'] = gross_profit / revenue
+
+        return df
+    
+    # SPAC 판별 메서드
+    def get_mark_spac(self, df: pd.DataFrame):
+        # 필수 컬럼 확인
+        required_cols = ['symbol', 'longBusinessSummary', 'industry', 'sector']
+        for col in required_cols:
+            if col not in df.columns:
+                print(f"❗필수 컬럼 누락: {col}")
+                return None
+
+        df = df.copy()
+        df['IsSPAC'] = False
+
+        for idx in range(len(df)):
+            try:
+                description = str(df.at[idx, 'longBusinessSummary']).lower()
+                industry = str(df.at[idx, 'industry']).lower()
+                sector = str(df.at[idx, 'sector']).lower()
+                # officers = df.at[idx, 'companyOfficers']
+                symbol = str(df.at[idx, 'symbol']).upper()
+
+                # 1. 키워드 기반
+                keywords = ["spac", "blank check", "special purpose acquisition"]
+                keyword_hit = any(kw in description or kw in industry or kw in sector for kw in keywords)
+
+                # 2. industry 기반
+                industry_based = industry in ["shell companies", "capital markets", "asset management"]
+
+                # 3. 임원 수 기반
+                # officer_based = isinstance(officers, list) and len(officers) <= 1
+
+                # 4. 티커 네이밍 기반
+                ticker_based = any(x in symbol for x in ["-U", "-WS", "-R"])
+
+                # 최종 판별
+                # is_spac = keyword_hit or industry_based or officer_based or ticker_based
+                is_spac = keyword_hit or industry_based or ticker_based
+                df.at[idx, 'IsSPAC'] = is_spac
+
+            except Exception as e:
+                print(f"[{symbol}] 판별 실패: {e}")
+                df.at[idx, 'IsSPAC'] = None
+
+        return df
+
+    def get_data(self, symbols:list, dateType:EDateType):
+        df = self.get_fs_all(symbols=symbols, dateType=dateType)
+        df = self.get_sector(df)
+        df = self.get_marketCap(df)
+        df = self.get_psr(df)
+        df = self.get_gp_a(df)
+        df = self.get_por(df)
+        df = self.get_ev_ebti(df)
+        df = self.get_per(df)
+        df = self.get_liquidation_value(df)
+        df = self.get_current_ratio(df)
+        df = self.get_pbr(df)
+        df = self.get_debt_to_equity_ratio(df)
+        df = self.get_pcr(df)
+        df = self.get_pfcr(df)
+        df = self.get_dividend_payout_ratio(df)
+        df = self.get_income_growth(df)
+        df = self.get_gross_profit_margin(df)
+        
+        df = df[['Date', 'Symbol', 'Sector', 'MarketCap', 'TotalRevenue', 'NetIncome', 'OperatingIncome', 'GrossProfitMargin', 'IncomeGrowth', 'PSR', 'GP/A', 'POR', 'EV/EBIT', 'PER', 'LiquidationValue', 'CurrentRatio','PBR', 'DebtToEquityRatio', 'CommonStockDividendPaid', 'PCR', 'PFCR', 'DividendPayoutRatio']]
+        df = df.dropna(subset=["MarketCap"])
+        df = df.infer_objects(copy=False)
+
+        return df

@@ -1,3 +1,4 @@
+from matplotlib import table
 import yfinance as yf
 import pandas as pd
 import commonHelper as ch
@@ -9,6 +10,7 @@ import random
 import concurrent.futures
 import sys
 import math
+import requests
 
 from db_financialStatement import DB_FinancialStatement
 from db_stock import DB_Stock
@@ -24,6 +26,8 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from bs4 import BeautifulSoup
 from IPython.display import display
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
 
 
 class DataDownloader:
@@ -290,6 +294,9 @@ class DataDownloader:
         # DB 연결
         connection = conn
 
+        # ✅ Date 컬럼 시간 제거 (datetime -> date)
+        df['Date'] = pd.to_datetime(df['Date']).dt.date
+        
         # ✅ NaN -> None 변환 (숫자형 컬럼 포함 safe 처리)
         df = df.astype(object).where(pd.notnull(df), None)
 
@@ -388,7 +395,21 @@ class DataDownloader:
     #--------------------
     @staticmethod
     def load_nysc_symbol():
-        driver = webdriver.Chrome()
+
+        # 2. User-Agent 변경 및 자동화 표시 제거
+        # 셀레니움은 브라우저가 자동화된 것임을 페이지에 표시. User-Agent를 일반 브라우저처럼 설정하고, webdriver 플래그를 제거하면 탐지를 피할 가능성이 있어.
+        options = Options()
+        options.add_argument("--disable-blink-features=AutomationControlled")
+        options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/91.0.4472.124 Safari/537.36")
+        options.add_argument("--start-maximized")
+
+        driver = webdriver.Chrome(options=options)
+        driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
+            "source": """
+            Object.defineProperty(navigator, 'webdriver', {get: () => undefined})
+            """
+        })
+
         driver.get("https://www.nyse.com/listings_directory/stock")
 
         # 쿠키 동의 팝업 처리
@@ -454,6 +475,55 @@ class DataDownloader:
         df = pd.DataFrame(data, columns=['symbol', 'name', 'url'])
         df.dropna(subset=['open', 'high', 'low', 'close', 'volume'], how='all')
         return df
+    
+
+    @staticmethod
+    def fetch_all_nyse_data(output_csv="nyse_listings_partial.csv"):
+        url = "https://www.nyse.com/api/quotes/filter"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/91.0.4472.124 Safari/537.36",
+            "Content-Type": "application/json",
+        }
+
+        payload = {
+            "instrumentType": "EQUITY",           # 혹은 "ETF"로 바꾸면 ETF만 조회
+            "pageNumber": 1,
+            "sortColumn": "NORMALIZED_TICKER",
+            "sortOrder": "ASC",
+            "maxResultsPerPage": 100,             # 한 페이지당 최대 요청 수 (보통 100까지 가능)
+            "filterToken": ""
+        }
+
+        all_data = []
+        page = 1
+
+        while True:
+            print(f"Fetching page {page}...")
+            payload["pageNumber"] = page
+            response = requests.post(url, headers=headers, json=payload)
+            
+            if response.status_code != 200:
+                print(f"❌ Error on page {page}: HTTP {response.status_code}")
+                break
+
+            data = response.json()
+            if not data:
+                print("✅ No more data found. Stopping.")
+                break
+
+            all_data.extend(data)
+            print(f"✅ Page {page} done, total records: {len(all_data)}")
+
+            # 🌟 데이터 중간 저장
+            df_partial = pd.DataFrame(all_data)
+            df_partial.to_csv(output_csv, index=False)
+            print(f"📥 중간 데이터 저장 완료: {output_csv}")
+
+            page += 1
+            time.sleep(2)  # 서버 부하 방지 및 봇 탐지 방지용 딜레이
+
+        df_final = pd.DataFrame(all_data)
+        return df_final
 
 
     @staticmethod
@@ -639,3 +709,42 @@ class DataDownloader:
                         print(f"🚨 {symbol}: No stock data available.")
                 except Exception as e:
                     print(f"❌ Error processing {symbol}: {e}")
+
+
+
+    @staticmethod
+    def upload_to_nyse():
+        csv_file = 'nyse_listings_final.csv'
+        
+        df = pd.read_csv(csv_file)
+        df = df[['symbolTicker','instrumentName','micCode','url']].copy()
+        df = df.where(pd.notna(df), None)
+
+        table_name = 'Stock'
+
+        with DB_NYSE() as nyse:
+            with nyse.conn.cursor() as cursor:
+                create_table_query = f"""
+                    CREATE TABLE IF NOT EXISTS {table_name} (
+                        id INT AUTO_INCREMENT PRIMARY KEY,
+                        symbolTicker VARCHAR(50) NOT NULL UNIQUE,
+                        instrumentName VARCHAR(255),
+                        micCode VARCHAR(50),
+                        url TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+                    );
+                    """
+                cursor.execute(create_table_query)
+
+                insert_query = f"""
+                    INSERT IGNORE INTO {table_name} (symbolTicker, instrumentName, micCode, url)
+                    VALUES (%s, %s, %s, %s)
+                    """
+                
+                for index, row in df.iterrows():
+                    data = (row['symbolTicker'], row['instrumentName'], row['micCode'], row['url'])
+                    cursor.execute(insert_query, data)
+
+            
+            nyse.conn.commit()
+            print(f"{cursor.rowcount} rows inserted.")
