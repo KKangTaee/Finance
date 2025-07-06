@@ -1,9 +1,13 @@
 from functools import reduce
+from heapq import merge
 from assetAllocation import AssetAllocation
 from db_stock import DB_Stock
 from mysqlConnecter import MySQLConnector
 from commonHelper import EFinancialStatementType, EDateType, EIndustry
 from IPython.display import display
+from datetime import datetime
+from dateutil.relativedelta import relativedelta
+from scipy.stats import norm
 
 import pymysql
 import pandas as pd
@@ -74,6 +78,26 @@ class DB_FinancialStatement(MySQLConnector):
 
         df = super().requestToDB(quary,['symbol'])
         symbols = [row['symbol'] for _, row in df.iterrows()] # iterrows 쓰면, 인덱스랑 데이터 분리되서 나옴
+        return symbols
+    
+
+    def getSymbolListByFilter(self):
+        # 3년 전 타임스탬프 (ms)
+        three_years_ago = datetime.now() - relativedelta(years=3)
+        three_years_ago_ms = int(three_years_ago.timestamp() * 1000)
+
+        symbols = []
+        query = f"""
+            SELECT symbol
+            FROM Company
+            WHERE isSpec IS NOT NULL
+            AND isSpec != 1
+            AND firstTradeDateMilliseconds IS NOT NULL
+            AND firstTradeDateMilliseconds < {three_years_ago_ms};
+        """
+
+        df = super().requestToDB(query, ['symbol'])
+        symbols = [row['symbol'] for _, row in df.iterrows()]
         return symbols
 
 
@@ -172,18 +196,30 @@ class DB_FinancialStatement(MySQLConnector):
         dfs = [is_df, bs_df, cf_df]
         merged = reduce(lambda left, right: pd.merge(left, right, on=['Symbol', 'Date', 'Name'], how='outer'), dfs)
 
+        # 필수항목이 없으면 제외시킨다
+        required_columns = [
+            "TotalRevenue", "CostOfRevenue", "GrossProfit", "OperatingIncome",
+            "NetIncome", "DilutedEPS", "TotalAssets", "TotalLiabilitiesNetMinorityInterest",
+            "CommonStockEquity", "CashAndCashEquivalents", "OperatingCashFlow",
+            "FreeCashFlow", "CapitalExpenditure", "DepreciationAndAmortization",
+            # "InterestExpense", "InterestIncome", "TaxProvision"
+        ]
+    
+        merged = merged.dropna(subset= required_columns)
+        merged = merged.reset_index(drop=True) # row를 제거했기 때문에 다시 인덱스를 재조정해야함 (안하면 뻑남)
+
         return merged
     
 
     # 시총구하기
     def get_marketCap(self, df):
         df = df.copy()
-        df['MarketCap'] = None
+        df['MarketCap'] = np.nan # none 보다 nan으로 처리해야지 경고문이 안뜸.
 
         for idx in range(len(df)):
             date = df.at[idx, 'Date']
             symbol = df.at[idx, 'Symbol']
-            ordinarySharesNumber = df.at[idx, 'OrdinarySharesNumber']
+            ordinarySharesNumber = df.at[idx, 'OrdinarySharesNumber'] # 현재 발행된 보통주의 수량
 
             first_date, last_date = ch.get_first_and_last_date(date)
 
@@ -589,6 +625,133 @@ class DB_FinancialStatement(MySQLConnector):
 
         return df
     
+
+    def get_dividend_yield_proxy(self, df:pd.DataFrame) ->pd.DataFrame:
+        """
+        시가총액 대비 배당금 비율을 의미
+        실제 "배당수익률"과 유사하나, 1주당 배당금 / 주가가 아닌 총 배당금 / 시총 형태
+        """
+
+        required_columns = ['CommonStockDividendPaid', 'MarketCap']
+        if not any(col in df.columns for col in required_columns):
+            return None
+        
+        df["CommonStockDividendPaid"] = df["CommonStockDividendPaid"].fillna(0)
+        df["MarketCap"] = df["MarketCap"].fillna(0)
+        df["DividendYieldProxy"] = df["CommonStockDividendPaid"] / df["MarketCap"]
+
+        return df
+    
+    def get_roe(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        ROE (Return on Equity) = NetIncomeCommonStockholders / CommonStockEquity
+        """
+        required_columns = ['NetIncomeCommonStockholders', 'CommonStockEquity']
+        if not all(col in df.columns for col in required_columns):
+            return None
+
+        df = df.copy()
+        df['ROE'] = None
+
+        for idx in range(len(df)):
+            net_income = df.at[idx, 'NetIncomeCommonStockholders']
+            equity = df.at[idx, 'CommonStockEquity']
+
+            if net_income is not None and equity and equity != 0:
+                df.at[idx, 'ROE'] = net_income / equity
+
+        return df
+    
+
+    def get_operating_margin(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Operating Margin = OperatingIncome / TotalRevenue
+        """
+        required_columns = ['OperatingIncome', 'TotalRevenue']
+        if not all(col in df.columns for col in required_columns):
+            return None
+
+        df = df.copy()
+        df['OperatingMargin'] = None
+
+        for idx in range(len(df)):
+            operating_income = df.at[idx, 'OperatingIncome']
+            revenue = df.at[idx, 'TotalRevenue']
+
+            if operating_income is not None and revenue and revenue != 0:
+                df.at[idx, 'OperatingMargin'] = operating_income / revenue
+
+        return df
+    
+
+    def get_free_cash_flow_margin(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Free Cash Flow Margin = FreeCashFlow / TotalRevenue
+        """
+        required_columns = ['FreeCashFlow', 'TotalRevenue']
+        if not all(col in df.columns for col in required_columns):
+            return None
+
+        df = df.copy()
+        df['FreeCashFlowMargin'] = None
+
+        for idx in range(len(df)):
+            fcf = df.at[idx, 'FreeCashFlow']
+            revenue = df.at[idx, 'TotalRevenue']
+
+            if fcf is not None and revenue and revenue != 0:
+                df.at[idx, 'FreeCashFlowMargin'] = fcf / revenue
+
+        return df
+    
+
+    def get_revenue_growth(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Revenue Growth = (Current TotalRevenue - Previous TotalRevenue) / Previous TotalRevenue
+        Symbol과 Date 컬럼이 필요.
+        """
+        required_columns = ['Symbol', 'Date', 'TotalRevenue']
+        if not all(col in df.columns for col in required_columns):
+            return None
+
+        df = df.copy()
+        df['RevenueGrowth'] = None
+
+        df = df.sort_values(['Symbol', 'Date']).reset_index(drop=True)
+
+        for idx in range(1, len(df)):
+            if df.at[idx, 'Symbol'] == df.at[idx - 1, 'Symbol']:
+                current_rev = df.at[idx, 'TotalRevenue']
+                prev_rev = df.at[idx - 1, 'TotalRevenue']
+
+                if current_rev is not None and prev_rev and prev_rev != 0:
+                    df.at[idx, 'RevenueGrowth'] = (current_rev - prev_rev) / prev_rev
+
+        return df
+    
+
+
+    def get_interest_coverage_ratio(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Interest Coverage Ratio = OperatingIncome / InterestExpense
+        """
+        required_columns = ['OperatingIncome', 'InterestExpense']
+        if not all(col in df.columns for col in required_columns):
+            return None
+
+        df = df.copy()
+        df['InterestCoverageRatio'] = None
+
+        for idx in range(len(df)):
+            operating_income = df.at[idx, 'OperatingIncome']
+            interest_expense = df.at[idx, 'InterestExpense']
+
+            if operating_income is not None and interest_expense and interest_expense != 0:
+                df.at[idx, 'InterestCoverageRatio'] = operating_income / interest_expense
+
+        return df
+
+
     # SPAC 판별 메서드
     def get_mark_spac(self, df: pd.DataFrame):
         # 필수 컬럼 확인
@@ -606,7 +769,7 @@ class DB_FinancialStatement(MySQLConnector):
                 description = str(df.at[idx, 'longBusinessSummary']).lower()
                 industry = str(df.at[idx, 'industry']).lower()
                 sector = str(df.at[idx, 'sector']).lower()
-                # officers = df.at[idx, 'companyOfficers']
+                officers = df.at[idx, 'companyOfficers']
                 symbol = str(df.at[idx, 'symbol']).upper()
 
                 # 1. 키워드 기반
@@ -617,13 +780,13 @@ class DB_FinancialStatement(MySQLConnector):
                 industry_based = industry in ["shell companies", "capital markets", "asset management"]
 
                 # 3. 임원 수 기반
-                # officer_based = isinstance(officers, list) and len(officers) <= 1
+                officer_based = isinstance(officers, list) and len(officers) <= 1
 
                 # 4. 티커 네이밍 기반
                 ticker_based = any(x in symbol for x in ["-U", "-WS", "-R"])
 
                 # 최종 판별
-                # is_spac = keyword_hit or industry_based or officer_based or ticker_based
+                is_spac = keyword_hit or industry_based or officer_based or ticker_based
                 is_spac = keyword_hit or industry_based or ticker_based
                 df.at[idx, 'IsSPAC'] = is_spac
 
@@ -642,18 +805,385 @@ class DB_FinancialStatement(MySQLConnector):
         df = self.get_por(df)
         df = self.get_ev_ebti(df)
         df = self.get_per(df)
-        df = self.get_liquidation_value(df)
         df = self.get_current_ratio(df)
         df = self.get_pbr(df)
         df = self.get_debt_to_equity_ratio(df)
         df = self.get_pcr(df)
         df = self.get_pfcr(df)
-        df = self.get_dividend_payout_ratio(df)
-        df = self.get_income_growth(df)
         df = self.get_gross_profit_margin(df)
+        df = self.get_income_growth(df)
+        df = self.get_roe(df) # 자기자본이익률
+        df = self.get_operating_margin(df) # 영업이익률 : 매출대비 영업이익률
+        df = self.get_free_cash_flow_margin(df) # 잉여현금흐름률 : 매출 대비 잉여현금흐름 비율
+        df = self.get_revenue_growth(df) # 매출성장률
+        df = self.get_interest_coverage_ratio(df) # 이자보상배율 : 영업이익이 이자비용을 몇 배나 감당할 수 있는지
         
-        df = df[['Date', 'Symbol', 'Sector', 'MarketCap', 'TotalRevenue', 'NetIncome', 'OperatingIncome', 'GrossProfitMargin', 'IncomeGrowth', 'PSR', 'GP/A', 'POR', 'EV/EBIT', 'PER', 'LiquidationValue', 'CurrentRatio','PBR', 'DebtToEquityRatio', 'CommonStockDividendPaid', 'PCR', 'PFCR', 'DividendPayoutRatio']]
+        df = df[['Date', 'Symbol', 'Sector', 'MarketCap', 'TotalRevenue', 'NetIncome', 'OperatingIncome', 'GrossProfitMargin', 'IncomeGrowth', 'PSR', 'GP/A', 'EV/EBIT', 'PER','CurrentRatio','PBR', 'DebtToEquityRatio', 'PCR', 'PFCR', 'ROE','OperatingMargin', 'FreeCashFlowMargin','RevenueGrowth','InterestCoverageRatio']]
         df = df.dropna(subset=["MarketCap"])
         df = df.infer_objects(copy=False)
 
         return df
+    
+
+    #----------------
+    # 스코어링 리스트 조회 (연간/분기)
+    #----------------
+    def save_file_fs_score_rank(self, symbols:list):
+
+        # 2. 연간/분기 재무재표 로드
+        df_year = self.get_data(symbols, EDateType.YEAR)
+        df_year_stats = DB_FinancialStatement.calc_sector_statistics(df_year)
+        
+        df_quarter = self.get_data(symbols, EDateType.QUARTER)
+        df_quarter_stats = DB_FinancialStatement.calc_sector_statistics(df_quarter)
+
+        df_year_score = DB_FinancialStatement.calc_scores(df_year, df_year_stats)
+        df_year_score = DB_FinancialStatement.aggregate_weighted_scores(df_year_score)
+        
+        df_quarter_score = DB_FinancialStatement.calc_scores(df_quarter, df_quarter_stats)
+        df_quarter_score = DB_FinancialStatement.aggregate_weighted_scores(df_quarter_score, dateType= EDateType.QUARTER)
+
+        df_year_score.to_csv("df_year_score_rank.csv", index=False)
+        df_quarter_score.to_csv("df_quarter_score_rank.csv", index=False)
+
+        display(df_year_score)
+        display(df_quarter_score)
+
+    
+
+
+
+    #--------------
+    # 스태틱 메서드
+    #--------------
+
+    @staticmethod
+    def calc_sector_statistics(df: pd.DataFrame, value_cols=None, verbose=False):
+        """
+        연간 재무제표 데이터에서 섹터별 컬럼별 통계와 IQR 기반 상하한선 계산
+        - df: 원본 DataFrame (Sector 컬럼 포함)
+        - value_cols: 스코어링에 쓸 재무 컬럼 리스트 (없으면 숫자형 컬럼 자동 선택)
+        - verbose: True면 컬럼 처리 상태를 출력
+        리턴: Sector, ColumnName, Mean, Std, UpperBound, LowerBound DataFrame
+        """
+        results = []
+
+        # 1) value_cols가 안 주어지면 숫자형 컬럼만 자동 선택
+        if value_cols is None or len(value_cols) == 0:
+            # 숫자형 컬럼만 포함
+            value_cols = df.select_dtypes(include=['number']).columns.tolist()
+            if verbose:
+                print(f"[INFO] 숫자형 컬럼 자동 선택됨: {value_cols}")
+
+        # 2) 섹터별 그룹화
+        grouped = df.groupby('Sector')
+
+        exclude_cols = [
+                'MarketCap', 'TotalRevenue', 'NetIncome', 'OperatingIncome',
+                'GrossProfitMargin', 'IncomeGrowth', 'Date', 'Symbol'
+            ]
+
+        for sector, group in grouped:
+            for col in value_cols:
+                if verbose:
+                    print(f"[INFO] Sector: {sector}, Column: {col}")
+
+                # NaN 제거
+                series = group[col].dropna()
+
+                if series.empty:
+                    continue
+
+                if col in exclude_cols:
+                    continue
+
+                mean = series.mean()
+                std = series.std()
+
+                q1 = series.quantile(0.25)
+                q3 = series.quantile(0.75)
+                iqr = q3 - q1
+
+                upper = q3 + 1.5 * iqr
+                lower = q1 - 1.5 * iqr
+
+                # PBR/PER 같은 지표라면 하한선 음수 방지
+                lower = max(lower, 0)
+
+                results.append({
+                    'Sector': sector,
+                    'ColumnName': col,
+                    'Mean': mean,
+                    'Std': std,
+                    'UpperBound': upper,
+                    'LowerBound': lower
+                })
+
+        result_df = pd.DataFrame(results)
+        return result_df
+
+
+    @staticmethod
+    def calc_scores(df_financials: pd.DataFrame,
+                                df_stats: pd.DataFrame,
+                                verbose=False):
+        """
+        각 연도별로 섹터별 상대평가 스코어를 계산
+
+        Parameters
+        ----------
+        df_financials : pd.DataFrame
+            기업별 연간 재무제표 데이터. (Date, Symbol, Sector, ... 포함)
+        df_stats : pd.DataFrame
+            섹터별 ColumnName별 평균, 표준편차, UpperBound, LowerBound.
+        scoring_columns : list
+            점수를 계산할 컬럼 리스트.
+        lower_better_columns : list
+            낮을수록 좋은 컬럼명 리스트.
+        verbose : bool
+            처리 과정을 출력할지 여부.
+
+        Returns
+        -------
+        pd.DataFrame
+            연도별 기업별 컬럼별 스코어 포함된 DataFrame.
+        """
+
+
+        # 점수화할 컬럼 리스트 예시
+        scoring_columns = [
+            'PSR', 'GP/A', 'EV/EBIT', 'PER',
+            'CurrentRatio', 'PBR', 'DebtToEquityRatio',
+            'PCR', 'PFCR', 'ROE', 'OperatingMargin',
+            'FreeCashFlowMargin', 'RevenueGrowth', 'InterestCoverageRatio'
+        ]
+
+        # 낮을수록 좋은 컬럼
+        lower_better_columns = [
+            'PER', 'PBR', 'PSR', 'EV/EBIT', 'PCR', 'PFCR', 'DebtToEquityRatio'
+        ]
+        
+        # 이 2개의 데이터만 결측값일 경우 0으로 처리하면 좋음.
+        # InterestCoverageRatio : 영업이익 / 이자비용 -> 이자보상배율
+        # 해석 : 이 값이 Nan이면 대부분의 이자비용이 0또는 매우 낮다는 의미이거나, 적자기업이라 음수도 나오는 케이스가 많음.
+        # 실무에서는 기업이 이자비용을 감당할 능력이 없다고 보고 보수적으로 0처리
+        # FreeCashFlowMargin : 매출 대비 잉여현금 흐름.
+        missing_fill_zero_columns = ['InterestCoverageRatio', 'FreeCashFlowMargin']
+        
+        results = []
+        if lower_better_columns is None:
+            lower_better_columns = []
+
+        for idx, row in df_financials.iterrows():
+            company_data = {
+                'Date': row['Date'],
+                'Symbol': row['Symbol'],
+                'Sector': row['Sector']
+            }
+
+            sector = row['Sector']
+
+            for col in scoring_columns:
+                # 섹터별 컬럼 평균/표준편차/상하한 가져오기
+                stat_row = df_stats[
+                    (df_stats['Sector'] == sector) & 
+                    (df_stats['ColumnName'] == col)
+                ]
+                if stat_row.empty:
+                    if verbose:
+                        print(f"[WARN] No stats for Sector={sector}, Column={col}")
+                    continue
+
+                mean = stat_row['Mean'].values[0]
+                std = stat_row['Std'].values[0]
+                upper = stat_row['UpperBound'].values[0]
+                lower = stat_row['LowerBound'].values[0]
+
+                value = row[col]
+
+                # ✔️ NaN 처리: 특정 컬럼은 0으로, 그 외는 섹터 평균으로 대체
+                if pd.isna(value):
+                    if col in missing_fill_zero_columns:
+                        value_filled = 0
+                        if verbose:
+                            print(f"[INFO] NaN for {col}, fill with ZERO")
+                    else:
+                        value_filled = mean
+                        if verbose:
+                            print(f"[INFO] NaN for {col}, fill with MEAN={mean:.4f}")
+                else:
+                    value_filled = value
+
+                # Winsorizing
+                value_clipped = np.clip(value_filled, lower, upper)
+
+                # Z-Score
+                z = (value_clipped - mean) / std if std != 0 else 0
+
+                # 낮을수록 좋은 지표는 부호 반전
+                if col in lower_better_columns:
+                    z = -z
+
+                # Z → CDF → 0~20 점수
+                cdf = norm.cdf(z)
+                score = cdf * 100
+
+                company_data[f'Score_{col}'] = score
+
+                if verbose:
+                    print(f"[OK] {row['Symbol']} {col}: Raw={value}, Filled={value_filled}, Clipped={value_clipped}, Z={z:.2f}, Score={score:.2f}")
+
+            results.append(company_data)
+
+        df_result = pd.DataFrame(results)
+        return df_result
+
+
+                
+    @staticmethod
+    def aggregate_weighted_scores(df_yearly_scores: pd.DataFrame,
+                                recent_weight: float = 0.7,
+                                past_weight: float = 0.3,
+                                sector_weight_dict: dict = None,
+                                verbose: bool = False,
+                                dateType : EDateType = EDateType.YEAR):
+        """
+        연도별 스코어 → 기업별 가중평균 스코어 → 섹터별 중요도 가중치로 Final_Score_Total 포함
+
+        Parameters
+        ----------
+        df_yearly_scores : pd.DataFrame
+            연도별 스코어 데이터 (calc_yearly_scores 결과)
+        recent_weight : float
+            최근 연도 가중치
+        past_weight : float
+            과거 연도 평균 가중치
+        sector_weight_dict : dict
+            섹터별 중요도 Dict. ex)
+            {
+            "Technology": {
+                "PSR": 0.2, "GP/A": 0.1, ...
+            },
+            "Finance": {
+                "PER": 0.3, "PBR": 0.2, ...
+            }
+            }
+        verbose : bool
+            True면 진행상황 출력
+
+        Returns
+        -------
+        pd.DataFrame
+            Symbol, Sector, Final_컬럼, Final_Score_Total 포함
+        """
+
+        sector_weight_dict = ch.get_sector_weights_dict()
+
+        df = df_yearly_scores.copy()
+        df['Year'] = pd.to_datetime(df['Date']).dt.year
+        score_cols = [col for col in df.columns if col.startswith('Score_')]
+
+        results = []
+
+        for (symbol, sector), group in df.groupby(['Symbol', 'Sector']):
+            recent_year = group['Year'].max()
+            recent_data = group[group['Year'] == recent_year]
+            past_data = group[group['Year'] < recent_year]
+
+            dateStr = "Year" if dateType == EDateType.YEAR else "Quarter"
+
+            result_row = {'Symbol': symbol, 'Sector': sector, 'DateType' : dateStr}
+
+            total_score = 0.0
+            total_weight = 0.0
+
+            for col in score_cols:
+                base_col = col.replace('Score_', '')  # ex) PSR
+
+                # 연도별 가중평균 스코어
+                recent_score = recent_data[col].values[0] if not recent_data.empty else None
+                past_mean = past_data[col].mean() if not past_data.empty else None
+
+                if pd.isna(recent_score) and pd.isna(past_mean):
+                    final_score = None
+                else:
+                    r = recent_score if not pd.isna(recent_score) else 0
+                    p = past_mean if not pd.isna(past_mean) else 0
+                    final_score = (recent_weight * r) + (past_weight * p)
+
+                result_row[f'Final_Score_{base_col}'] = final_score
+
+                # ✔️ 섹터별 가중치 적용
+                if sector_weight_dict and sector in sector_weight_dict:
+                    weight = sector_weight_dict[sector].get(base_col, 0)
+                else:
+                    weight = 1.0  # fallback: 1로 간주
+
+                if final_score is not None:
+                    total_score += final_score * weight
+                    total_weight += weight
+
+                if verbose:
+                    print(f"[OK] {symbol} {base_col}: Recent={recent_score}, PastMean={past_mean} => "
+                        f"Final={final_score:.2f if final_score else None}, Weight={weight}")
+
+            # ✔️ 가중치 총합이 0이면 안전 처리
+            result_row['Final_Score_Total'] = total_score / total_weight if total_weight != 0 else None
+
+            results.append(result_row)
+
+        df_result = pd.DataFrame(results)
+        df_result_sorted = df_result.sort_values(by='Final_Score_Total', ascending=False).reset_index(drop=True)
+        return df_result_sorted
+
+
+    @staticmethod
+    def combine_scores(
+        df_year_score: pd.DataFrame,
+        df_quarter_score: pd.DataFrame,
+        annual_weight: float = 0.3,
+        quarterly_weight: float = 0.7,
+        top_n: int = 100
+    ) -> pd.DataFrame:
+        """
+        연간/분기 스코어를 Symbol, Sector 기준으로 병합한 뒤
+        기간별 가중평균을 적용해 TopN 결과를 반환합니다.
+
+        Parameters:
+        ----------
+        df_year_score : pd.DataFrame
+            ['Symbol', 'Sector', 'Final_Score_Total'] 포함해야 함
+        df_quarter_score : pd.DataFrame
+            ['Symbol', 'Sector', 'Final_Score_Total'] 포함해야 함
+        annual_weight : float
+            연간 데이터 가중치 (기본: 0.3)
+        quarterly_weight : float
+            분기 데이터 가중치 (기본: 0.7)
+        top_n : int
+            반환할 상위 기업 수 (기본: 20)
+
+        Returns:
+        -------
+        pd.DataFrame
+            Symbol, Sector, Final_Score_Combined 컬럼으로 정렬된 TopN DataFrame
+        """
+        # 1) Symbol/Sector 기준 merge
+        df_merged = pd.merge(
+            df_year_score,
+            df_quarter_score,
+            on=['Symbol', 'Sector'],
+            suffixes=('_Annual', '_Quarterly')
+        )
+
+        # 2) Final_Score_Total 기준으로 기간별 가중평균
+        df_merged['Final_Score_Combined'] = (
+            df_merged['Final_Score_Total_Annual'] * annual_weight +
+            df_merged['Final_Score_Total_Quarterly'] * quarterly_weight
+        )
+
+        # 3) TopN 정렬
+        df_result = df_merged[['Symbol', 'Sector', 'Final_Score_Combined']].copy()
+        df_result = df_result.sort_values('Final_Score_Combined', ascending=False).reset_index(drop=True)
+        df_result = df_result.head(top_n)
+
+        return df_result

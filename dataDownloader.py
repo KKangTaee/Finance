@@ -11,6 +11,7 @@ import concurrent.futures
 import sys
 import math
 import requests
+import datetime
 
 from db_financialStatement import DB_FinancialStatement
 from db_stock import DB_Stock
@@ -571,9 +572,8 @@ class DataDownloader:
     def save_company_info_to_db(stockInfo, conn):
         try:
             info = stockInfo.stock.info
-            symbol = stockInfo.ticker.upper()  # 주식 심볼 가져오기
+            symbol = stockInfo.ticker.upper()
 
-            # ✅ Company 테이블 존재 여부 확인 및 생성
             with conn.cursor() as cursor:
                 cursor.execute("""
                     SELECT COUNT(*) AS count 
@@ -591,45 +591,50 @@ class DataDownloader:
                     conn.commit()
                     print(f"🆕 Company 테이블 생성 완료")
 
-            # ✅ MySQL 테이블 컬럼 리스트 확인
             with conn.cursor() as cursor:
                 cursor.execute("SELECT COLUMN_NAME, DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'Company'")
                 existing_columns = {row['COLUMN_NAME']: row['DATA_TYPE'] for row in cursor.fetchall()}
 
-            # ✅ MySQL 컬럼과 매칭되는 데이터 추출
+            # 기존 info 데이터를 복사
             data = {key: info.get(key, None) for key in info.keys()}
-            data.pop("companyOfficers", None)  # ❌ companyOfficers 제거
-            data["symbol"] = symbol  # 심볼 추가
+            data["symbol"] = symbol
+         
+            # 상장일 표시
+            first_trade_date = data["firstTradeDateMilliseconds"]
+            data['firstTradeDate'] = datetime.datetime.fromtimestamp(first_trade_date/1000).date()
 
-            # ✅ 추가해야 할 컬럼 찾기 (데이터 타입 구분)
+            data = DataDownloader.get_mark_spac_dict(data)
+
+            # 데이터에 count 추가, companyOfficers 제거
+            data.pop("companyOfficers", None)
+
+            # ✅ 누락된 컬럼 자동 추가
             missing_columns = set(data.keys()) - set(existing_columns.keys())
 
             if missing_columns:
                 with conn.cursor() as cursor:
                     for col in missing_columns:
                         value = data[col]
-
-                        # 숫자형 데이터는 FLOAT, BIGINT 등으로 저장
-                        if isinstance(value, int):
+                        if col == "firstTradeDate":
+                            col_type = "DATE NULL"  # 개수는 정수형
+                        elif isinstance(value, int):
                             col_type = "BIGINT NULL"
                         elif isinstance(value, float):
                             col_type = "FLOAT NULL"
                         elif isinstance(value, str) and len(value) > 255:
-                            col_type = "TEXT NULL"  # 255자를 초과하는 문자열은 TEXT
+                            col_type = "TEXT NULL"
                         else:
-                            col_type = "VARCHAR(255) NULL"  # 기본적으로 VARCHAR(255)
-
+                            col_type = "VARCHAR(255) NULL"
                         sql = f"ALTER TABLE Company ADD COLUMN `{col}` {col_type};"
                         cursor.execute(sql)
                     conn.commit()
                 print(f"🛠️ {symbol} - 누락된 컬럼 추가 완료: {missing_columns}")
 
-
-            # ✅ 데이터 변환 (dict, list → JSON 문자열)
+            # ✅ dict, list는 JSON 문자열로 변환 (이미 companyOfficers는 제거됨)
             for key, value in data.items():
                 if isinstance(value, (dict, list)):
-                    data[key] = json.dumps(value)  # JSON 문자열로 변환
-                    
+                    data[key] = json.dumps(value)
+
             # ✅ 데이터 삽입 또는 업데이트
             columns = ", ".join(data.keys())
             placeholders = ", ".join(["%s"] * len(data))
@@ -643,8 +648,7 @@ class DataDownloader:
                 """
                 cursor.execute(sql, tuple(data.values()))
                 conn.commit()
-            # print(f"✅ {symbol} - 데이터 저장 완료")
-            sys.stdout.write(f"✅ {symbol} - 데이터 저장 완료")  # 한 줄 덮어쓰기
+            sys.stdout.write(f"✅ {symbol} - 데이터 저장 완료")
             sys.stdout.flush()
 
         except Exception as e:
@@ -666,36 +670,31 @@ class DataDownloader:
 
     @staticmethod
     def downloadCompanyInfoAndSaveDB(symbols=[]):
-        db = DB_FinancialStatement()
-        db.connect()
 
-        if len(symbols) == 0:
-            symbol_db = DB_NYSE()
-            symbol_db.connect()
+        with DB_FinancialStatement() as fs:
 
-            symbols = symbol_db.getSymbolList()
-            
-            symbol_db.disconnect()
+            if len(symbols) == 0:
+                with DB_NYSE() as nyse:
+                    symbols = nyse.getSymbolList()
+                
+            max_workers = min(5, len(symbols))  # 적절한 워커 수 결정 (너무 많은 스레드 방지)
 
+            # 병렬 처리
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = {executor.submit(DataDownloader.process_symbol, symbol): symbol for symbol in symbols}
 
-        max_workers = min(3, len(symbols))  # 적절한 워커 수 결정 (너무 많은 스레드 방지)
+                for future in tqdm(concurrent.futures.as_completed(futures), total=len(futures), desc="Processing Companies"):
+                    symbol = futures[future]  # 항상 가져오기
+                    try:
+                        result_symbol, info = future.result()
+                        if info and info.stock is not None:
+                            DataDownloader.save_company_info_to_db(info, fs.conn)
+                        else:
+                            print(f"🚨 {result_symbol}: No stock data available.")
+                    except Exception as e:
+                        print(f"❌ Error processing {symbol}: {e}")
 
-        # 병렬 처리
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {executor.submit(DataDownloader.process_symbol, symbol): symbol for symbol in symbols}
-
-            for future in tqdm(concurrent.futures.as_completed(futures), total=len(futures), desc="Processing Companies"):
-                symbol = futures[future]  # 항상 가져오기
-                try:
-                    result_symbol, info = future.result()
-                    if info and info.stock is not None:
-                        DataDownloader.save_company_info_to_db(info, db.conn)
-                    else:
-                        print(f"🚨 {result_symbol}: No stock data available.")
-                except Exception as e:
-                    print(f"❌ Error processing {symbol}: {e}")
-
-        db.disconnect()
+    
 
     @staticmethod
     def downloadCompanyInfoAndSaveDB_V2(symbols:list):
@@ -748,3 +747,58 @@ class DataDownloader:
             
             nyse.conn.commit()
             print(f"{cursor.rowcount} rows inserted.")
+
+
+    
+    @staticmethod
+    def get_mark_spac_dict(record: dict) -> dict:
+        try:
+            # 필수 키 확인
+            required_keys = ['symbol', 'longBusinessSummary', 'industry', 'sector']
+            for key in required_keys:
+                if key not in record:
+                    print(f"❗필수 키 누락: {key}")
+                    record['isSpec'] = None
+                    return record
+
+            # 값들을 소문자로 변환 (str 타입 강제)
+            description = str(record.get('longBusinessSummary', '')).lower()
+            industry = str(record.get('industry', '')).lower()
+            sector = str(record.get('sector', '')).lower()
+            symbol = str(record.get('symbol', '')).upper()
+
+             # 💡 companyOfficers 처리
+            officers = record.get("companyOfficers", [])
+            if isinstance(officers, list):
+                officers = len(officers)
+            else:
+                officers = 0
+
+            # 1️⃣ 키워드 기반
+            keywords = ["spac", "blank check", "special purpose acquisition"]
+            keyword_hit = any(kw in description or kw in industry or kw in sector for kw in keywords)
+
+            # 2️⃣ industry 기반
+            industry_based = industry in ["shell companies", "capital markets", "asset management"]
+
+            if officers != -1:
+                # 3️⃣ 임원 수 기반
+                officer_based = officers <= 0
+            else:
+                officer_based = False
+
+            # 4️⃣ 티커 네이밍 기반
+            ticker_based = any(x in symbol for x in ["-U", "-WS", "-R"])
+
+            # 최종 판별 (여기서는 officer 기반까지 고려할지 선택 가능)
+            is_spac = keyword_hit or industry_based or officer_based or ticker_based
+
+            # 결과 추가
+            record['isSpec'] = is_spac
+
+        except Exception as e:
+            print(f"[{record.get('symbol', 'UNKNOWN')}] 판별 실패: {e}")
+            record['isSpec'] = None
+
+        return record
+    

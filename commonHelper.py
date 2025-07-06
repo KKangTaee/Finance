@@ -191,3 +191,144 @@ def get_first_and_last_date(date_obj):
     end = next_month - timedelta(days=1)
     
     return start.date(), end.date()
+
+
+def get_sector_weights_dict():
+    sector_weights = {
+        "Technology": {
+            "PSR": 0.20,
+            "GP/A": 0.10,
+            "EV/EBIT": 0.10,
+            "PER": 0.10,
+            "CurrentRatio": 0.05,
+            "PBR": 0.05,
+            "DebtToEquityRatio": 0.05,
+            "PCR": 0.10,
+            "PFCR": 0.10,
+            "ROE": 0.05,
+            "OperatingMargin": 0.05,
+            "FreeCashFlowMargin": 0.025,
+            "RevenueGrowth": 0.025,
+            "InterestCoverageRatio": 0.025
+        },
+        "Healthcare": {
+            "PSR": 0.15,
+            "GP/A": 0.10,
+            "EV/EBIT": 0.10,
+            "PER": 0.10,
+            "PBR": 0.05,
+            "DebtToEquityRatio": 0.05,
+            "PCR": 0.05,
+            "PFCR": 0.05,
+            "ROE": 0.10,
+            "OperatingMargin": 0.10,
+            "FreeCashFlowMargin": 0.10,
+            "RevenueGrowth": 0.10,
+            "InterestCoverageRatio": 0.05
+        },
+        "Financials": {
+            "PER": 0.25,
+            "PBR": 0.20,
+            "PSR": 0.05,
+            "GP/A": 0.05,
+            "ROE": 0.20,
+            "DebtToEquityRatio": 0.10,
+            "CurrentRatio": 0.05,
+            "OperatingMargin": 0.05,
+            "RevenueGrowth": 0.025,
+            "InterestCoverageRatio": 0.025
+        },
+        "ConsumerDiscretionary": {
+            "PSR": 0.20,
+            "PER": 0.15,
+            "PBR": 0.10,
+            "GP/A": 0.05,
+            "ROE": 0.10,
+            "OperatingMargin": 0.10,
+            "RevenueGrowth": 0.10,
+            "FreeCashFlowMargin": 0.05,
+            "CurrentRatio": 0.05,
+            "DebtToEquityRatio": 0.05,
+            "InterestCoverageRatio": 0.05
+        },
+        "ConsumerStaples": {
+            "PER": 0.20,
+            "PBR": 0.15,
+            "GP/A": 0.10,
+            "ROE": 0.15,
+            "OperatingMargin": 0.15,
+            "RevenueGrowth": 0.10,
+            "FreeCashFlowMargin": 0.05,
+            "DebtToEquityRatio": 0.05,
+            "InterestCoverageRatio": 0.05
+        },
+        "Industrials": {
+            "EV/EBIT": 0.20,
+            "PER": 0.15,
+            "PBR": 0.10,
+            "GP/A": 0.10,
+            "ROE": 0.10,
+            "OperatingMargin": 0.10,
+            "RevenueGrowth": 0.10,
+            "FreeCashFlowMargin": 0.05,
+            "DebtToEquityRatio": 0.05,
+            "InterestCoverageRatio": 0.05
+        },
+        "Energy": {
+            "EV/EBIT": 0.25,
+            "PER": 0.15,
+            "PBR": 0.10,
+            "GP/A": 0.05,
+            "ROE": 0.10,
+            "OperatingMargin": 0.15,
+            "FreeCashFlowMargin": 0.10,
+            "RevenueGrowth": 0.05,
+            "DebtToEquityRatio": 0.05
+        },
+        "Utilities": {
+            "PER": 0.20,
+            "PBR": 0.20,
+            "GP/A": 0.10,
+            "ROE": 0.15,
+            "OperatingMargin": 0.10,
+            "RevenueGrowth": 0.05,
+            "DebtToEquityRatio": 0.10,
+            "InterestCoverageRatio": 0.10
+        },
+        "Materials": {
+            "EV/EBIT": 0.20,
+            "PER": 0.15,
+            "PBR": 0.10,
+            "GP/A": 0.10,
+            "ROE": 0.10,
+            "OperatingMargin": 0.10,
+            "RevenueGrowth": 0.10,
+            "FreeCashFlowMargin": 0.05,
+            "DebtToEquityRatio": 0.05,
+            "InterestCoverageRatio": 0.05
+        },
+        "CommunicationServices": {
+            "PSR": 0.15,
+            "PER": 0.15,
+            "PBR": 0.10,
+            "GP/A": 0.05,
+            "ROE": 0.15,
+            "OperatingMargin": 0.10,
+            "RevenueGrowth": 0.10,
+            "FreeCashFlowMargin": 0.10,
+            "DebtToEquityRatio": 0.05,
+            "InterestCoverageRatio": 0.05
+        },
+        "RealEstate": {
+            "PER": 0.20,
+            "PBR": 0.20,
+            "GP/A": 0.05,
+            "ROE": 0.10,
+            "OperatingMargin": 0.05,
+            "FreeCashFlowMargin": 0.10,
+            "RevenueGrowth": 0.10,
+            "DebtToEquityRatio": 0.10,
+            "InterestCoverageRatio": 0.10
+        }
+    }
+    return sector_weights
