@@ -143,7 +143,7 @@ class DataDownloader:
                 cursor.executemany(insert_sql, data)
                 conn.commit()
 
-            print(f"✅ {symbol} - {tableName} 데이터 삽입 완료")
+            # print(f"✅ {symbol} - {tableName} 데이터 삽입 완료")
 
         except Exception as e:
             print(f"⚠️ {symbol} - {tableName} 오류 발생: {e}")

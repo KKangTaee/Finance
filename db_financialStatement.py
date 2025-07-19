@@ -1,5 +1,6 @@
 from functools import reduce
 from heapq import merge
+from symtable import Symbol
 from assetAllocation import AssetAllocation
 from db_stock import DB_Stock
 from mysqlConnecter import MySQLConnector
@@ -8,6 +9,7 @@ from IPython.display import display
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 from scipy.stats import norm
+from dateutil.parser import parse
 
 import pymysql
 import pandas as pd
@@ -81,10 +83,18 @@ class DB_FinancialStatement(MySQLConnector):
         return symbols
     
 
-    def getSymbolListByFilter(self):
-        # 3년 전 타임스탬프 (ms)
-        three_years_ago = datetime.now() - relativedelta(years=3)
-        three_years_ago_ms = int(three_years_ago.timestamp() * 1000)
+    def getSymbolListByFilter(self, min_year = 0):
+
+        if min_year == 0:
+            # N년전 1월 1일 반환
+            now = datetime.now()
+            target_year = now.year - 4 
+            years_ago = datetime(year=target_year, month=1,day=1,hour=0,minute=0,second=0)
+        else:
+            years_ago = datetime(year=min_year, month=1,day=1,hour=0,minute=0,second=0)
+
+        years_ago_ms = int(years_ago.timestamp()*1000)
+        print(f"{years_ago} 이전 상장된 기업 추출")
 
         symbols = []
         query = f"""
@@ -93,7 +103,7 @@ class DB_FinancialStatement(MySQLConnector):
             WHERE isSpec IS NOT NULL
             AND isSpec != 1
             AND firstTradeDateMilliseconds IS NOT NULL
-            AND firstTradeDateMilliseconds < {three_years_ago_ms};
+            AND firstTradeDateMilliseconds < {years_ago_ms};
         """
 
         df = super().requestToDB(query, ['symbol'])
@@ -180,7 +190,7 @@ class DB_FinancialStatement(MySQLConnector):
         return df
     
 
-    def get_fs_all(self, symbols:list, dateType:EDateType):
+    def get_fs_all(self, symbols:list, dateType:EDateType, min_year:int = 0):
         
         if not symbols:
             return pd.DataFrame()
@@ -197,18 +207,46 @@ class DB_FinancialStatement(MySQLConnector):
         merged = reduce(lambda left, right: pd.merge(left, right, on=['Symbol', 'Date', 'Name'], how='outer'), dfs)
 
         # 필수항목이 없으면 제외시킨다
-        required_columns = [
-            "TotalRevenue", "CostOfRevenue", "GrossProfit", "OperatingIncome",
-            "NetIncome", "DilutedEPS", "TotalAssets", "TotalLiabilitiesNetMinorityInterest",
-            "CommonStockEquity", "CashAndCashEquivalents", "OperatingCashFlow",
-            "FreeCashFlow", "CapitalExpenditure", "DepreciationAndAmortization",
-            # "InterestExpense", "InterestIncome", "TaxProvision"
+
+        # Income Statement 항목
+        income_statement_cols = [
+            "TotalRevenue",
+            # "CostOfRevenue", # 매출원가
+            "GrossProfit",
+            "OperatingIncome",
+            "NetIncome",
+            # "DilutedEPS",   # 희석 주당순이익
+            # "DepreciationAndAmortization" # 감가상각과 무형자산상각
         ]
+
+        # Balance Sheet 항목
+        balance_sheet_cols = [
+            "TotalAssets",
+            "TotalLiabilitiesNetMinorityInterest",
+            "CommonStockEquity",
+            # "CashAndCashEquivalents"
+        ]
+
+        # Cash Flow 항목
+        cash_flow_cols = [
+            "OperatingCashFlow",
+            "FreeCashFlow",
+            "CapitalExpenditure"
+        ]
+
+        required_columns = income_statement_cols + balance_sheet_cols + cash_flow_cols
     
         merged = merged.dropna(subset= required_columns)
+
+        if min_year > 0:
+            min_date = datetime(min_year, 1, 1).date()
+            merged = merged[merged['Date'] >= min_date]
+
         merged = merged.reset_index(drop=True) # row를 제거했기 때문에 다시 인덱스를 재조정해야함 (안하면 뻑남)
 
         return merged
+    
+
     
 
     # 시총구하기
@@ -731,6 +769,7 @@ class DB_FinancialStatement(MySQLConnector):
     
 
 
+    # 이자보상배율 : 기업이 영업이익으로 이자비용을 얼마나 잘 갚을 수 있는지 나타내는 지표
     def get_interest_coverage_ratio(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         Interest Coverage Ratio = OperatingIncome / InterestExpense
@@ -744,7 +783,7 @@ class DB_FinancialStatement(MySQLConnector):
 
         for idx in range(len(df)):
             operating_income = df.at[idx, 'OperatingIncome']
-            interest_expense = df.at[idx, 'InterestExpense']
+            interest_expense = df.at[idx, 'InterestExpense'] # 이자비용 : 기업이 빌린 돈(부채)에 대해 지급하는 이자비용. 
 
             if operating_income is not None and interest_expense and interest_expense != 0:
                 df.at[idx, 'InterestCoverageRatio'] = operating_income / interest_expense
@@ -796,8 +835,8 @@ class DB_FinancialStatement(MySQLConnector):
 
         return df
 
-    def get_data(self, symbols:list, dateType:EDateType):
-        df = self.get_fs_all(symbols=symbols, dateType=dateType)
+    def get_data(self, symbols:list, dateType:EDateType, min_year:int = 0):
+        df = self.get_fs_all(symbols=symbols, dateType=dateType, min_year= min_year)
         df = self.get_sector(df)
         df = self.get_marketCap(df)
         df = self.get_psr(df)
@@ -1187,3 +1226,319 @@ class DB_FinancialStatement(MySQLConnector):
         df_result = df_result.head(top_n)
 
         return df_result
+    
+    def add_quarter_column(df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Date 컬럼을 기준으로 몇 분기인지 계산하여 'Quarter' 컬럼을 추가하고,
+        이 컬럼을 'Date' 컬럼 바로 뒤에 위치시켜 반환합니다.
+        """
+        # Date 컬럼이 datetime 타입이 아니면 변환
+        if not pd.api.types.is_datetime64_any_dtype(df['Date']):
+            df['Date'] = pd.to_datetime(df['Date'])
+
+        # month를 기준으로 Quarter 구하기
+        df['Quarter'] = df['Date'].dt.month.map({
+            1: 'Q1', 2: 'Q1', 3: 'Q1',
+            4: 'Q2', 5: 'Q2', 6: 'Q2',
+            7: 'Q3', 8: 'Q3', 9: 'Q3',
+            10: 'Q4', 11: 'Q4', 12: 'Q4'
+        })
+
+        # 'YYYY-Q#' 형태로 표시하고 싶으면 아래와 같이 수정
+        df['Quarter'] = df['Date'].dt.year.astype(str) + '-' + df['Quarter']
+
+        # 컬럼 순서 변경: Date 뒤에 Quarter 오도록 재정렬
+        cols = df.columns.tolist()
+        date_idx = cols.index('Date')
+        # 기존 위치에서 Quarter 빼기
+        cols.remove('Quarter')
+        # Date 뒤에 Quarter 삽입
+        cols.insert(date_idx + 1, 'Quarter')
+        # 컬럼 순서 적용
+        df = df[cols]
+
+        return df
+
+
+    def create_quarter_groups(df: pd.DataFrame, window_size: int = 4) -> list:
+        """
+        Quarter 컬럼을 활용해 window_size 크기만큼 rolling 그룹핑하여,
+        마지막 row의 Quarter가 Q4이면 그 그룹은 제외하고,
+        각 그룹은 Date, Symbol 오름차순 정렬 후 리스트로 반환합니다.
+
+        Parameters:
+            df (pd.DataFrame): 입력 DataFrame (Quarter 컬럼 필수)
+            window_size (int): 그룹핑할 분기 수 (기본값=4)
+
+        Returns:
+            list: 그룹별 DataFrame 리스트
+        """
+        # 정렬
+        df_sorted = df.sort_values(['Symbol', 'Date']).reset_index(drop=True)
+
+        # Quarter 고유 값 순서 유지
+        unique_quarters = df_sorted['Quarter'].drop_duplicates().tolist()
+
+        result_groups = []
+
+        for i in range(len(unique_quarters) - (window_size - 1)):
+            group_quarters = unique_quarters[i:i+window_size]
+
+            # 마지막 row의 Quarter가 Q4이면 제외
+            if group_quarters[-1].endswith('Q4'):
+                continue
+
+            # 그룹 필터링
+            group_df = df_sorted[df_sorted['Quarter'].isin(group_quarters)].copy()
+
+            # 다시 Symbol, Date 순으로 정렬 보장
+            group_df = group_df.sort_values(['Symbol', 'Date']).reset_index(drop=True)
+
+            result_groups.append(group_df)
+
+        return result_groups
+
+
+    # year 년을 기준으로 n_years 전년까지의 데이터 필터링
+    def filter_annual_data(df: pd.DataFrame, year: int, n_years: int) -> pd.DataFrame:
+        """
+        기준 year를 포함해 N년 전까지 연간 데이터만 필터링하여 반환합니다.
+        
+        Parameters:
+            df (pd.DataFrame): 입력 데이터프레임
+            year (int): 기준 연도 (포함)
+            n_years (int): 포함할 연간 데이터 범위 (기준 연도 포함)
+
+        Returns:
+            pd.DataFrame: 필터링된 데이터프레임 (Date, Symbol 오름차순 정렬)
+        """
+        # Date 컬럼이 datetime 타입이 아니면 변환
+        if not pd.api.types.is_datetime64_any_dtype(df['Date']):
+            df['Date'] = pd.to_datetime(df['Date'])
+
+        # 연도 범위 계산
+        start_year = year - n_years # (n_years - 1)
+        end_year = year
+
+        # Date 컬럼에서 연도 추출
+        df['Year'] = df['Date'].dt.year
+
+        # 연도 필터링
+        filtered_df = df[(df['Year'] >= start_year) & (df['Year'] <= end_year)].copy()
+
+        # 필요하다면 Year 컬럼 drop
+        filtered_df.drop(columns=['Year'], inplace=True)
+
+        # 정렬
+        filtered_df = filtered_df.sort_values(['Symbol', 'Date']).reset_index(drop=True)
+
+        return filtered_df
+    
+
+    #----------------
+    # 날짜 범위 반환
+    #----------------
+    def generate_quarter_range(start_quarter: str, end_quarter: str) -> list:
+        def quarter_to_date(q):
+            year, qtr = q.split('-Q')
+            month = {'1': '01', '2': '04', '3': '07', '4': '10'}[qtr]
+            return parse(f"{year}-{month}-01")
+
+        def date_to_quarter(date_obj):
+            month = date_obj.month
+            quarter = (month - 1) // 3 + 1
+            return f"{date_obj.year}-Q{quarter}"
+
+        start_date = quarter_to_date(start_quarter)
+        end_date = quarter_to_date(end_quarter)
+
+        quarters = []
+        current = start_date
+        while current <= end_date:
+            quarters.append(date_to_quarter(current))
+            current += relativedelta(months=3)
+
+        return quarters
+
+    def get_symbols_with_quarter_range(df: pd.DataFrame, start_quarter: str, end_quarter: str) -> list:
+        required_quarters = set(DB_FinancialStatement.generate_quarter_range(start_quarter, end_quarter))
+        print(f"🔍 검사할 분기 범위: {sorted(required_quarters)}")
+
+        valid_symbols = []
+
+        for symbol, group in df.groupby('Symbol'):
+            available_quarters = set(group['Quarter'].unique())
+            if required_quarters.issubset(available_quarters):
+                valid_symbols.append(symbol)
+            else:
+                missing = sorted(required_quarters - available_quarters)
+                # print(f"❌ Symbol '{symbol}' 누락 분기: {missing}")
+
+        if not valid_symbols:
+            print("⚠️ 지정된 범위를 모두 만족하는 Symbol이 없습니다.")
+        else:
+            print(f"✅ 범위 내 모든 분기를 가진 Symbol 수: {len(valid_symbols)}")
+
+        return valid_symbols
+    
+
+    #----------------------------
+    # 2024-Qn 이런식으로 Quarter 컬럼 구현
+    #----------------------------
+    def add_quarter_column(df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Date 컬럼을 기준으로 몇 분기인지 계산하여 'Quarter' 컬럼을 추가하고,
+        이 컬럼을 'Date' 컬럼 바로 뒤에 위치시켜 반환합니다.
+        """
+        # Date 컬럼이 datetime 타입이 아니면 변환
+        if not pd.api.types.is_datetime64_any_dtype(df['Date']):
+            df['Date'] = pd.to_datetime(df['Date'])
+
+        # month를 기준으로 Quarter 구하기
+        df['Quarter'] = df['Date'].dt.month.map({
+            1: 'Q1', 2: 'Q1', 3: 'Q1',
+            4: 'Q2', 5: 'Q2', 6: 'Q2',
+            7: 'Q3', 8: 'Q3', 9: 'Q3',
+            10: 'Q4', 11: 'Q4', 12: 'Q4'
+        })
+
+        # 'YYYY-Q#' 형태로 표시하고 싶으면 아래와 같이 수정
+        df['Quarter'] = df['Date'].dt.year.astype(str) + '-' + df['Quarter']
+
+        # 컬럼 순서 변경: Date 뒤에 Quarter 오도록 재정렬
+        cols = df.columns.tolist()
+        date_idx = cols.index('Date')
+        # 기존 위치에서 Quarter 빼기
+        cols.remove('Quarter')
+        # Date 뒤에 Quarter 삽입
+        cols.insert(date_idx + 1, 'Quarter')
+        # 컬럼 순서 적용
+        df = df[cols]
+
+        return df
+    
+
+    def filter_common_quarters(df: pd.DataFrame, symbols: list) -> pd.DataFrame:
+        if not symbols:
+            print("⚠️ 유효한 Symbol 리스트가 비어 있습니다. 빈 DataFrame 반환.")
+            return df.iloc[0:0].copy()
+
+        df_valid = df[df['Symbol'].isin(symbols)].copy()
+
+        # Symbol별 보유 분기 Set
+        symbol_quarters = df_valid.groupby('Symbol')['Quarter'].apply(set)
+
+        # 교집합 도출
+        common_quarters = set.intersection(*symbol_quarters)
+        common_quarters_sorted = sorted(common_quarters)
+        print(f"✅ 교집합 Quarters: {common_quarters_sorted}")
+
+        # 각 Symbol이 보유한 전체 분기 수
+        total_quarter_counts = symbol_quarters.apply(len)
+        min_count = total_quarter_counts.min()
+        narrowing_symbols = total_quarter_counts[total_quarter_counts == min_count].index.tolist()
+
+        print(f"⚠️ 교집합이 줄어든 원인 Symbol(가장 적은 분기 보유): {narrowing_symbols}")
+        print(f"📊 이들 Symbol의 보유 분기 수: {min_count}")
+
+        # 최종 필터링
+        filtered_df = df_valid[df_valid['Quarter'].isin(common_quarters)].copy()
+        filtered_df = filtered_df.sort_values(['Symbol', 'Date']).reset_index(drop=True)
+
+        return filtered_df
+    
+
+    def show_rank_top_in_qurter_legacy():
+        symbol_columns = []
+        column_names = []
+
+        with DB_FinancialStatement() as fs:
+            symbols = fs.getSymbolListByFilter()
+            symbols = symbols[:5]
+
+            df_year = fs.get_data(symbols, EDateType.YEAR) 
+            
+            df_quarter = fs.get_data(symbols, EDateType.QUARTER)
+            df_quarter = DB_FinancialStatement.add_quarter_column(df_quarter)
+            df_quarter_list = DB_FinancialStatement.create_quarter_groups(df_quarter) # 4분기씩 리스트로 구함
+
+            for df_quarter in df_quarter_list:
+                year = df_quarter.iloc[-1]['Date'].year
+                df_year = DB_FinancialStatement.filter_annual_data(df_year, year-1, 4)
+
+                column_name = df_quarter.iloc[-1]['Quarter']
+
+                df_year_stat = DB_FinancialStatement.calc_sector_statistics(df_year)
+                df_year_score = DB_FinancialStatement.calc_scores(df_year, df_year_stat)
+                df_year_score_total = DB_FinancialStatement.aggregate_weighted_scores(df_year_score)
+
+                df_quarter_stat = DB_FinancialStatement.calc_sector_statistics(df_quarter)
+                df_quarter_score = DB_FinancialStatement.calc_scores(df_quarter, df_quarter_stat)
+                df_quarter_score_total = DB_FinancialStatement.aggregate_weighted_scores(df_quarter_score, dateType= EDateType.QUARTER)
+
+                df_result = DB_FinancialStatement.combine_scores(df_year_score_total, df_quarter_score_total)
+                
+                # Symbol만 Series로 추출하고 인덱스 초기화
+                symbol_col = df_result['Symbol'].reset_index(drop=True)
+                symbol_columns.append(symbol_col)
+                column_names.append(column_name)
+
+        # 루프 끝난 뒤: 컬럼 방향으로 병합
+        final_df = pd.concat(symbol_columns, axis=1)
+        # 컬럼명 지정
+        final_df.columns = column_names
+
+        final_df.to_csv('rank_top_qurter.csv', index= True)
+
+        display(final_df)
+
+
+    def show_rank_by_fs(start_quarter ='2024-Q2',  end_quarter ='2025-Q1'):
+        symbol_columns = []
+        column_names = []
+        
+        with DB_FinancialStatement() as fs:
+            quarters = DB_FinancialStatement.generate_quarter_range(start_quarter, end_quarter) # 범위 리스트 구하기
+            min_year = int(quarters[3].split('-Q')[0]) - 3 # 필터 된 날짜.
+
+            symbols = fs.getSymbolListByFilter(min_year) # 필터링된 날짜까지만 추출
+            print(f"{min_year} 이전 상장 티커 수 : {len(symbols)}")
+
+            df_year = fs.get_data(symbols, EDateType.YEAR, min_year)
+            df_quarter = fs.get_data(symbols, EDateType.QUARTER)
+            df_quarter = DB_FinancialStatement.add_quarter_column(df_quarter)
+            
+            valid_symbols = DB_FinancialStatement.get_symbols_with_quarter_range(df_quarter, start_quarter, end_quarter)
+            df_quarter = DB_FinancialStatement.filter_common_quarters(df_quarter, valid_symbols)   
+            df_quarter_list = DB_FinancialStatement.create_quarter_groups(df_quarter) # 4분기씩 리스트로 구함
+
+            for df_quarter in df_quarter_list:
+                year = df_quarter.iloc[-1]['Date'].year
+                df_year = DB_FinancialStatement.filter_annual_data(df_year, year-1, 3)
+
+                column_name = df_quarter.iloc[-1]['Quarter']
+
+                df_year_stat = DB_FinancialStatement.calc_sector_statistics(df_year)
+                df_year_score = DB_FinancialStatement.calc_scores(df_year, df_year_stat)
+                df_year_score_total = DB_FinancialStatement.aggregate_weighted_scores(df_year_score)
+
+                df_quarter_stat = DB_FinancialStatement.calc_sector_statistics(df_quarter)
+                df_quarter_score = DB_FinancialStatement.calc_scores(df_quarter, df_quarter_stat)
+                df_quarter_score_total = DB_FinancialStatement.aggregate_weighted_scores(df_quarter_score, dateType= EDateType.QUARTER)
+
+                df_result = DB_FinancialStatement.combine_scores(df_year_score_total, df_quarter_score_total)
+                
+                df_result.to_csv(f'{column_name}_rank.csv', index = True)
+
+                # Symbol만 Series로 추출하고 인덱스 초기화
+                symbol_col = df_result['Symbol'].reset_index(drop=True)
+                symbol_columns.append(symbol_col)
+                column_names.append(column_name)
+
+        if len(symbol_columns) > 0:
+            # 루프 끝난 뒤: 컬럼 방향으로 병합
+            final_df = pd.concat(symbol_columns, axis=1)
+            # 컬럼명 지정
+            final_df.columns = column_names
+            final_df.to_csv(f'rank_top_qurter_{datetime.now()}.csv', index= True)
+            display(final_df)
