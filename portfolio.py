@@ -139,7 +139,7 @@ class Portfolio:
 
     def show_portfolio():
         start_date = '2013-12-01'
-        end_date = '2025-07-01'
+        end_date = '2025-07-17'
         allocations = [
             {'Harry Brown': Portfolio.harry_browne_permanent_portfolio(start_date, end_date)},
             {'Ray Dailo' : Portfolio.ray_dalio_all_seasons(start_date, end_date)},

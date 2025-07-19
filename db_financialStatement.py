@@ -1448,50 +1448,6 @@ class DB_FinancialStatement(MySQLConnector):
         return filtered_df
     
 
-    def show_rank_top_in_qurter_legacy():
-        symbol_columns = []
-        column_names = []
-
-        with DB_FinancialStatement() as fs:
-            symbols = fs.getSymbolListByFilter()
-            symbols = symbols[:5]
-
-            df_year = fs.get_data(symbols, EDateType.YEAR) 
-            
-            df_quarter = fs.get_data(symbols, EDateType.QUARTER)
-            df_quarter = DB_FinancialStatement.add_quarter_column(df_quarter)
-            df_quarter_list = DB_FinancialStatement.create_quarter_groups(df_quarter) # 4분기씩 리스트로 구함
-
-            for df_quarter in df_quarter_list:
-                year = df_quarter.iloc[-1]['Date'].year
-                df_year = DB_FinancialStatement.filter_annual_data(df_year, year-1, 4)
-
-                column_name = df_quarter.iloc[-1]['Quarter']
-
-                df_year_stat = DB_FinancialStatement.calc_sector_statistics(df_year)
-                df_year_score = DB_FinancialStatement.calc_scores(df_year, df_year_stat)
-                df_year_score_total = DB_FinancialStatement.aggregate_weighted_scores(df_year_score)
-
-                df_quarter_stat = DB_FinancialStatement.calc_sector_statistics(df_quarter)
-                df_quarter_score = DB_FinancialStatement.calc_scores(df_quarter, df_quarter_stat)
-                df_quarter_score_total = DB_FinancialStatement.aggregate_weighted_scores(df_quarter_score, dateType= EDateType.QUARTER)
-
-                df_result = DB_FinancialStatement.combine_scores(df_year_score_total, df_quarter_score_total)
-                
-                # Symbol만 Series로 추출하고 인덱스 초기화
-                symbol_col = df_result['Symbol'].reset_index(drop=True)
-                symbol_columns.append(symbol_col)
-                column_names.append(column_name)
-
-        # 루프 끝난 뒤: 컬럼 방향으로 병합
-        final_df = pd.concat(symbol_columns, axis=1)
-        # 컬럼명 지정
-        final_df.columns = column_names
-
-        final_df.to_csv('rank_top_qurter.csv', index= True)
-
-        display(final_df)
-
 
     def show_rank_by_fs(start_quarter ='2024-Q2',  end_quarter ='2025-Q1'):
         symbol_columns = []
