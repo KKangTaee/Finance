@@ -211,12 +211,11 @@ class DB_FinancialStatement(MySQLConnector):
         # Income Statement 항목
         income_statement_cols = [
             "TotalRevenue",
-            # "CostOfRevenue", # 매출원가
             "GrossProfit",
             "OperatingIncome",
             "NetIncome",
-            # "DilutedEPS",   # 희석 주당순이익
-            # "DepreciationAndAmortization" # 감가상각과 무형자산상각
+            "DilutedEPS",   # 희석 주당순이익
+            "DilutedAverageShares" # 희석 가능성 포함한 평균 주식수
         ]
 
         # Balance Sheet 항목
@@ -224,7 +223,6 @@ class DB_FinancialStatement(MySQLConnector):
             "TotalAssets",
             "TotalLiabilitiesNetMinorityInterest",
             "CommonStockEquity",
-            # "CashAndCashEquivalents"
         ]
 
         # Cash Flow 항목
@@ -235,7 +233,7 @@ class DB_FinancialStatement(MySQLConnector):
         ]
 
         required_columns = income_statement_cols + balance_sheet_cols + cash_flow_cols
-    
+
         merged = merged.dropna(subset= required_columns)
 
         if min_year > 0:
@@ -247,33 +245,74 @@ class DB_FinancialStatement(MySQLConnector):
         return merged
     
 
-    
+    def get_stock_price_close(self, fs_df:pd.DataFrame):
+        fs_df['Date'] = pd.to_datetime(fs_df['Date'])
+        fs_df = fs_df.sort_values(['Symbol','Date'])
+        
+        symbols = list(set(fs_df['Symbol']))
 
+        price_df_list = []
+        with DB_Stock() as stock:
+            for symbol in symbols:
+                # 1. 회계 데이터에서 해당 symbol의 날짜 가져오기
+                filter_date = fs_df[fs_df['Symbol'] == symbol]['Date'].sort_values().reset_index(drop=True)
+                start_date = filter_date.iloc[0].replace(day=1)
+                end_date = filter_date.iloc[-1]
+
+                # 2. 주가 데이터 가져오기
+                price_df = stock.getStockData(symbol, start_date, end_date, EDateType.MONTHLY)
+                price_df['Date'] = pd.to_datetime(price_df['Date'])
+
+                # 3. 연-월 기준 필터링
+                filter_date_month = filter_date.dt.to_period('M').astype(str)
+                price_date_month = price_df['Date'].dt.to_period('M').astype(str)
+                price_df = price_df[price_date_month.isin(filter_date_month)].sort_values(['Symbol','Date']).reset_index(drop=True)
+
+                # 4. 일(day)을 filter_date에서 가져와서 수정
+                #    (연/월 순서가 같다고 가정)
+                price_df['Date'] = price_df['Date'].combine(
+                    filter_date, 
+                    lambda base, match: pd.Timestamp(base).replace(day=match.day))
+
+                # 5. 결과 저장
+                price_df_list.append(price_df)
+
+        price_df = pd.concat(price_df_list, ignore_index=True)
+        price_df_subset = price_df[['Date','Symbol','Close']]
+        merged = pd.merge(fs_df, price_df_subset, on=['Symbol','Date'], how='left')
+        return merged
+
+    
     # 시총구하기
-    def get_marketCap(self, df):
+    # def get_marketCap(self, df):
+    #     df = df.copy()
+    #     df['MarketCap'] = np.nan # none 보다 nan으로 처리해야지 경고문이 안뜸.
+
+    #     for idx in range(len(df)):
+    #         date = df.at[idx, 'Date']
+    #         symbol = df.at[idx, 'Symbol']
+    #         ordinarySharesNumber = df.at[idx, 'OrdinarySharesNumber'] # 현재 발행된 보통주의 수량
+
+    #         first_date, last_date = ch.get_first_and_last_date(date)
+
+    #         with DB_Stock() as stock:
+    #             try:
+    #                 stock_df = stock.getStockData(symbol, first_date, last_date)
+    #                 symbol_dfs = AssetAllocation.filter_close_last_month({symbol: stock_df})
+                
+    #                 close = symbol_dfs[symbol].at[0, 'Close']
+    #                 market_cap = ordinarySharesNumber * close
+    #                 df.at[idx, 'MarketCap'] = market_cap
+    #             except Exception as e:
+    #                 print(f"[ERROR] Market cap 계산 중 예외 발생: {e}")
+    #                 # 주가 데이터가 존재하지 않을 경우 NaN으로 유지
+    #                 df.at[idx, 'MarketCap'] = np.nan
+
+    #     return df
+    def get_market_cap(self, df:pd.DataFrame)-> pd.DataFrame:
         df = df.copy()
         df['MarketCap'] = np.nan # none 보다 nan으로 처리해야지 경고문이 안뜸.
-
-        for idx in range(len(df)):
-            date = df.at[idx, 'Date']
-            symbol = df.at[idx, 'Symbol']
-            ordinarySharesNumber = df.at[idx, 'OrdinarySharesNumber'] # 현재 발행된 보통주의 수량
-
-            first_date, last_date = ch.get_first_and_last_date(date)
-
-            with DB_Stock() as stock:
-                try:
-                    stock_df = stock.getStockData(symbol, first_date, last_date)
-                    symbol_dfs = AssetAllocation.filter_close_last_month({symbol: stock_df})
-                
-                    close = symbol_dfs[symbol].at[0, 'Close']
-                    market_cap = ordinarySharesNumber * close
-                    df.at[idx, 'MarketCap'] = market_cap
-                except Exception as e:
-                    print(f"[ERROR] Market cap 계산 중 예외 발생: {e}")
-                    # 주가 데이터가 존재하지 않을 경우 NaN으로 유지
-                    df.at[idx, 'MarketCap'] = np.nan
-
+        df['MarketCap'] = df['Close'] * df['DilutedAverageShares']
         return df
     
 
@@ -625,9 +664,13 @@ class DB_FinancialStatement(MySQLConnector):
 
             prev_income = df.at[idx-1, 'OperatingIncome']
             curr_income = df.at[idx, 'OperatingIncome']
-            ratio = ((curr_income - prev_income)/prev_income).round(2)
 
-            df.at[idx, 'IncomeGrowth'] = ratio
+            if prev_income == 0:
+                print(f"[get_income_growth]{df.at[idx, 'Symbol']} prev_income is 0")
+                df.at[idx, 'IncomeGrowth'] = np.nan
+            else:
+                ratio = ((curr_income - prev_income)/prev_income).round(2)
+                df.at[idx, 'IncomeGrowth'] = ratio
 
         return df
     
@@ -837,8 +880,9 @@ class DB_FinancialStatement(MySQLConnector):
 
     def get_data(self, symbols:list, dateType:EDateType, min_year:int = 0):
         df = self.get_fs_all(symbols=symbols, dateType=dateType, min_year= min_year)
+        df = self.get_stock_price_close(df) # 각 재무재표 발표날짜의 종가 데이터 반환
         df = self.get_sector(df)
-        df = self.get_marketCap(df)
+        df = self.get_market_cap(df)
         df = self.get_psr(df)
         df = self.get_gp_a(df)
         df = self.get_por(df)
@@ -890,6 +934,20 @@ class DB_FinancialStatement(MySQLConnector):
 
     
 
+    # 재무재표 흐름
+    # Total Revenue (매출액)
+    #     └─ (-) COGS (매출원가)
+    #         └─> Gross Profit (매출총이익)
+    #             └─ (-) Operating Expenses (영업비용(ex. 인건비))
+    #                 └─> Operating Income (영업이익)
+    #                     └─ (+/-) 기타 수익 및 비용
+    #                         └─> Pre-Tax Income (새전이익)
+    #                             └─ (-) Taxes 
+    #                                 └─> Net Income (순이익)
+    
+    # PER을 구할때는 DilutedEPS(희석주당순이익)로 구함 (BasicEPS 가 아니라)
+    # EPS는 순이익/보통주 한것 -> 즉, 1개의 주식이 얼마의 이익을 창출했냐를 보는 것
+    # 근데, 희석주당순이익은 여러가지 옵션들이 들어가서 구해진 주당순이익
 
 
     #--------------
@@ -1365,6 +1423,7 @@ class DB_FinancialStatement(MySQLConnector):
         print(f"🔍 검사할 분기 범위: {sorted(required_quarters)}")
 
         valid_symbols = []
+        missing_rows = []
 
         for symbol, group in df.groupby('Symbol'):
             available_quarters = set(group['Quarter'].unique())
@@ -1372,7 +1431,14 @@ class DB_FinancialStatement(MySQLConnector):
                 valid_symbols.append(symbol)
             else:
                 missing = sorted(required_quarters - available_quarters)
+                missing_rows.append({'Symbol': symbol, 'Missing': missing})
                 # print(f"❌ Symbol '{symbol}' 누락 분기: {missing}")
+
+        # 루프가 끝난 뒤 한 번에 DataFrame 생성
+        if len(missing_rows) > 0:
+            missing_df = pd.DataFrame(missing_rows)
+            missing_df.to_csv("제외된컬럼.csv", index=False)
+
 
         if not valid_symbols:
             print("⚠️ 지정된 범위를 모두 만족하는 Symbol이 없습니다.")
@@ -1465,6 +1531,7 @@ class DB_FinancialStatement(MySQLConnector):
             df_quarter = DB_FinancialStatement.add_quarter_column(df_quarter)
             
             valid_symbols = DB_FinancialStatement.get_symbols_with_quarter_range(df_quarter, start_quarter, end_quarter)
+
             df_quarter = DB_FinancialStatement.filter_common_quarters(df_quarter, valid_symbols)   
             df_quarter_list = DB_FinancialStatement.create_quarter_groups(df_quarter) # 4분기씩 리스트로 구함
 
@@ -1482,9 +1549,8 @@ class DB_FinancialStatement(MySQLConnector):
                 df_quarter_score = DB_FinancialStatement.calc_scores(df_quarter, df_quarter_stat)
                 df_quarter_score_total = DB_FinancialStatement.aggregate_weighted_scores(df_quarter_score, dateType= EDateType.QUARTER)
 
-                df_result = DB_FinancialStatement.combine_scores(df_year_score_total, df_quarter_score_total)
-                
-                df_result.to_csv(f'{column_name}_rank.csv', index = True)
+                df_result = DB_FinancialStatement.combine_scores(df_year_score_total, df_quarter_score_total)   
+                df_result.to_csv(f'{column_name}_rank_01.csv', index = True)
 
                 # Symbol만 Series로 추출하고 인덱스 초기화
                 symbol_col = df_result['Symbol'].reset_index(drop=True)

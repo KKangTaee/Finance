@@ -1,3 +1,4 @@
+from operator import index
 from matplotlib import table
 import yfinance as yf
 import pandas as pd
@@ -161,22 +162,32 @@ class DataDownloader:
         if len(symbols) == 0:
             symbols = db.getSymbolList()
 
-        for symbol in tqdm(symbols, desc="Processing Companies"):
-            
-            info.setCompany(symbol)
+        check_file_name = f"fs_download_{date}_{datetime.datetime.now()}.csv"
 
+        download_df = pd.DataFrame(columns=['Symbol'])
+        removed_df = pd.DataFrame(columns=['Symbol'])
+
+        for symbol in tqdm(symbols, desc="Processing Companies"):
             try:
+                info.setCompany(symbol)
                 stock_info = info.stock.info
                 if not stock_info:
                     print(f"⚠️ {symbol} - stock.info 비어있음!")
                     continue
             except Exception as e:
                 print(f"⚠️ {symbol} - stock.info 가져오기 실패: {e}")
+                new_row = pd.DataFrame([{'Symbol': symbol}])
+                removed_df = pd.concat([removed_df, new_row], ignore_index=True)
+                removed_df.to_csv("상패list.csv", index =False)
                 continue
 
             DataDownloader.save_fs_to_db(info, db.conn, ch.EFinancialStatementType.INCOME_STATEMENT, date)
             DataDownloader.save_fs_to_db(info, db.conn, ch.EFinancialStatementType.BALANCE_SHEET, date)
             DataDownloader.save_fs_to_db(info, db.conn, ch.EFinancialStatementType.CASH_FLOW, date)
+
+            new_row = pd.DataFrame([{'Symbol': symbol}])
+            download_df = pd.concat([download_df, new_row], ignore_index=True)
+            download_df.to_csv(check_file_name, index =False)
 
         db.disconnect()
 

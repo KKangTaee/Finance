@@ -159,3 +159,26 @@ class Portfolio:
             name = list(pair.keys())[0]
             df = list(pair.values())[0]
             display(AssetAllocation.get_performance(df, name))
+
+
+    #-----------------
+    # 분기 재무재표를 통한 top N개의 분할 포트폴리오 구성
+    #-----------------
+    def show_portfolio_by_fs_quarter():
+        df = pd.read_csv('2025-Q1_rank_01.csv')
+        df = df.drop(columns=['Unnamed: 0'])
+
+        symbols = df['Symbol'].to_list()[:20]
+        start_date = "2025-05-30"
+        end_date = "2025-07-18"
+
+        n = len(symbols)
+        base = 100 // n
+        remainder = 100 % n
+        ratios = [base + 1 if i < remainder else base for i in range(n)]
+
+        df = AssetAllocation.get_stock_data_with_ma(symbols=symbols, start_date=start_date, end_date=end_date, mas=[10], type='ma_month')
+        df = AssetAllocation.filter_close_last_month(df)
+        df = AssetAllocation.strategy_evenly(df, ratios=ratios, interval=12)
+
+        display(df)
