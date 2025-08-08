@@ -141,6 +141,7 @@ class AssetAllocation:
         elif type == 'ma_month':
             prev_day = sort_mas[-1]*25
             prev_date = start_date -relativedelta(days=prev_day*1.5)
+            print(prev_date)
 
         # 월말 데이터 가져오기
         symbol_dfs = AssetAllocation.get_stock_data_close(symbols=symbols, start_date=prev_date, end_date=end_date, include_diviend=True, key= 'Close')
@@ -1033,3 +1034,76 @@ class AssetAllocation:
         return df
 
 
+    # NCVA 전략
+    # 아래의 조건에 맞는 종목 찾기
+    #   1. 유동자산 - 총부채 > 시가총액
+    #   2. 분기 수익률 > 0
+    #   3. 1,2번 조건에 맞는 주식들 중에서 (유동자산 - 총부채) / 시가총액 비중이 가장 높은 주식 매수하기
+    # * df_ncva 에 랭크 데이터가 들어옴.
+    def strategy_ncva(symbols_dfs:dict, df_ncva_rank:pd.DataFrame, date_dict:dict, init_balance = 10000):
+
+        df = AssetAllocation.merge_to_dfs(symbols_dfs)
+
+        columns = [col for col in df.columns if col not in ['Adj Close','Close','Dividends','Condition']]
+        df = df[columns]
+
+        df['End Balance'] = None
+        df['Restart Asset'] = None
+        df['Restart Balance'] = None
+        df['Balance'] = None
+
+        for i in range(len(df)):
+            # symbols = df.at[i,'Symbol']
+            date = df.at[i,'Date']
+            symbols = []
+
+            for quarter, (start, end) in date_dict.items():
+                if start <= date <= end:
+                    symbols = df_ncva_rank[quarter].dropna().tolist()
+                    df.at[i, 'Restart Asset'] = symbols
+                    break
+
+            symbols_len = len(symbols)
+
+            try:
+                if i == 0:
+                    init_balance = 10000      
+                    start_balances = [round(init_balance//symbols_len) for _ in range(symbols_len)]
+                    end_balances = [0]*symbols_len
+                    df.at[i, 'Restart Balance'] = start_balances
+                    df.at[i, 'End Balance'] = end_balances
+                    df.at[i, 'Balance'] = init_balance
+                else:
+                    before_symbols = df.at[i-1, 'Symbol']
+                    before_closes = df.at[i-1, 'Result Close']
+                    before_restart_assets = df.at[i-1, 'Restart Asset']
+                    
+                    symbol_to_close = dict(zip(before_symbols, before_closes))
+                    before_restart_result_close = [symbol_to_close.get(sym, 0) for sym in before_restart_assets]
+
+                    curr_symbols = df.at[i, 'Symbol']
+                    curr_closes = df.at[i, 'Result Close']
+                    symbol_to_close = dict(zip(curr_symbols, curr_closes))
+                    curr_restart_result_close = [symbol_to_close.get(sym, 0) for sym in before_restart_assets]
+                    
+                    change_factors = [
+                        curr_restart_result_close[j] / before_restart_result_close[j]
+                        if before_restart_result_close[j] != 0 else 0
+                        for j in range(len(before_restart_result_close))
+                    ]
+                    end_balances = [round(df.at[i-1, 'Restart Balance'][j] * change_factors[j], 2) for j in range(len(change_factors))]
+                    df.at[i, 'End Balance'] = end_balances
+
+                    total_balance = sum(end_balances)
+                    df.at[i, 'Balance'] = total_balance
+
+                    curr_restart_assets = df.at[i, 'Restart Asset']
+
+                    if set(before_restart_assets) == set(curr_restart_assets):
+                        df.at[i, 'Restart Balance'] = end_balances
+                    else:
+                        df.at[i, 'Restart Balance'] = [total_balance//symbols_len] * symbols_len
+            except Exception as e:
+                print(e)
+
+        return df

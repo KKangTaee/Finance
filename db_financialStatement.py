@@ -10,6 +10,7 @@ from datetime import datetime
 from dateutil.relativedelta import relativedelta
 from scipy.stats import norm
 from dateutil.parser import parse
+from typing import Callable
 
 import pymysql
 import pandas as pd
@@ -104,6 +105,20 @@ class DB_FinancialStatement(MySQLConnector):
             AND isSpec != 1
             AND firstTradeDateMilliseconds IS NOT NULL
             AND firstTradeDateMilliseconds < {years_ago_ms};
+        """
+
+        df = super().requestToDB(query, ['symbol'])
+        symbols = [row['symbol'] for _, row in df.iterrows()]
+        return symbols
+    
+
+    def get_symbol_list(self):
+        symbols = []
+        query = f"""
+            SELECT symbol
+            FROM Company
+            WHERE isSpec != 1
+            AND (country IS NULL OR country != 'china');
         """
 
         df = super().requestToDB(query, ['symbol'])
@@ -214,7 +229,7 @@ class DB_FinancialStatement(MySQLConnector):
             "GrossProfit",
             "OperatingIncome",
             "NetIncome",
-            "DilutedEPS",   # 희석 주당순이익
+            "DilutedEPS",          # 희석 주당순이익
             "DilutedAverageShares" # 희석 가능성 포함한 평균 주식수
         ]
 
@@ -242,7 +257,11 @@ class DB_FinancialStatement(MySQLConnector):
 
         merged = merged.reset_index(drop=True) # row를 제거했기 때문에 다시 인덱스를 재조정해야함 (안하면 뻑남)
 
-        return merged
+        df = self.get_stock_price_close(merged) # 각 재무재표 발표날짜의 종가 데이터 반환
+        df = self.get_sector(df)
+        df = self.get_market_cap(df)
+
+        return df
     
 
     def get_stock_price_close(self, fs_df:pd.DataFrame):
@@ -283,32 +302,7 @@ class DB_FinancialStatement(MySQLConnector):
         return merged
 
     
-    # 시총구하기
-    # def get_marketCap(self, df):
-    #     df = df.copy()
-    #     df['MarketCap'] = np.nan # none 보다 nan으로 처리해야지 경고문이 안뜸.
 
-    #     for idx in range(len(df)):
-    #         date = df.at[idx, 'Date']
-    #         symbol = df.at[idx, 'Symbol']
-    #         ordinarySharesNumber = df.at[idx, 'OrdinarySharesNumber'] # 현재 발행된 보통주의 수량
-
-    #         first_date, last_date = ch.get_first_and_last_date(date)
-
-    #         with DB_Stock() as stock:
-    #             try:
-    #                 stock_df = stock.getStockData(symbol, first_date, last_date)
-    #                 symbol_dfs = AssetAllocation.filter_close_last_month({symbol: stock_df})
-                
-    #                 close = symbol_dfs[symbol].at[0, 'Close']
-    #                 market_cap = ordinarySharesNumber * close
-    #                 df.at[idx, 'MarketCap'] = market_cap
-    #             except Exception as e:
-    #                 print(f"[ERROR] Market cap 계산 중 예외 발생: {e}")
-    #                 # 주가 데이터가 존재하지 않을 경우 NaN으로 유지
-    #                 df.at[idx, 'MarketCap'] = np.nan
-
-    #     return df
     def get_market_cap(self, df:pd.DataFrame)-> pd.DataFrame:
         df = df.copy()
         df['MarketCap'] = np.nan # none 보다 nan으로 처리해야지 경고문이 안뜸.
@@ -394,7 +388,7 @@ class DB_FinancialStatement(MySQLConnector):
     # EV/EVIT
     # 시가총액 + 총부채 - 현금 및 현금성 자산 = EV(기업가치)
     # EVIT는 세전이익을 말함. 그래서 기업가치를 세전이익으로 나눈것을 말한다.
-    def get_ev_ebti(self, df: pd.DataFrame):
+    def get_ev_ebit(self, df: pd.DataFrame):
         # 필수 컬럼 확인
         required_columns = ['MarketCap', 'TotalDebt', 'CashCashEquivalentsAndShortTermInvestments', 'EBIT']
         for col in required_columns:
@@ -424,6 +418,10 @@ class DB_FinancialStatement(MySQLConnector):
     
     # PER
     # 시총분에 순이익을 나눈 것
+    # 근데, 구할때 단순히 해당 분기의 시총값 / 순이익으로 처리하면 안됨.
+    # TTM이라고해서 12월 분을 합산해서 처리해야함.
+    # 이게 무슨말이냐면. 종가 / (4분기 EPS를 합한 값) 으로 처리해야함.
+    # 지금은 현재 분기 기점으로 이전분기가 부족하기 때문에 둬야 한다.
     def get_per(self, df: pd.DataFrame):
         # 필수 컬럼 확인
         required_columns = ['MarketCap', 'NetIncome']
@@ -437,16 +435,14 @@ class DB_FinancialStatement(MySQLConnector):
 
         # 각 행에 대해 PER 계산
         for idx in range(len(df)):
-            market_cap = df.at[idx, 'MarketCap']
-            net_income = df.at[idx, 'NetIncome']
-
-            # NetIncome이 0 또는 음수면 PER 계산 불가 (None 유지)
-            # if net_income > 0:
-            if net_income and net_income != 0:
-                df.at[idx, 'PER'] = market_cap / net_income
+            close = df.at[idx, 'MarketCap']
+            netIncome = df.at[idx, 'NetIncome']
+            
+            if netIncome != 0:
+                df.at[idx, 'PER'] = close / netIncome
             else:
                 df.at[idx, 'PER'] = np.nan
-
+        
         return df
     
 
@@ -470,13 +466,13 @@ class DB_FinancialStatement(MySQLConnector):
         for idx in range(len(df)):
             current_assets = df.at[idx, 'CurrentAssets']
             total_liabilities = df.at[idx, 'TotalLiabilitiesNetMinorityInterest']
-            market_cap = df.at[idx, 'MarketCap']
 
             # 청산가치 계산
             liquidation_value = current_assets - total_liabilities
             df.at[idx, 'LiquidationValue'] = liquidation_value
         
         return df
+    
     
 
     # 유동비율
@@ -593,7 +589,7 @@ class DB_FinancialStatement(MySQLConnector):
         for idx in range(len(df)):
             market_cap = df.at[idx, 'MarketCap']
             operating_cash_flow = df.at[idx, 'OperatingCashFlow']
-            capital_expenditure = df.at[idx, 'CapitalExpenditure']
+            capital_expenditure = df.at[idx, 'CapitalExpenditure'] # 자본적 지출.
 
             # 잉여현금흐름 계산 (CapitalExpenditure는 음수로 기록될 수 있음)
             free_cash_flow = operating_cash_flow - (capital_expenditure if capital_expenditure is not None else 0)
@@ -880,13 +876,11 @@ class DB_FinancialStatement(MySQLConnector):
 
     def get_data(self, symbols:list, dateType:EDateType, min_year:int = 0):
         df = self.get_fs_all(symbols=symbols, dateType=dateType, min_year= min_year)
-        df = self.get_stock_price_close(df) # 각 재무재표 발표날짜의 종가 데이터 반환
-        df = self.get_sector(df)
-        df = self.get_market_cap(df)
+      
         df = self.get_psr(df)
         df = self.get_gp_a(df)
         df = self.get_por(df)
-        df = self.get_ev_ebti(df)
+        df = self.get_ev_ebit(df)
         df = self.get_per(df)
         df = self.get_current_ratio(df)
         df = self.get_pbr(df)
@@ -901,12 +895,32 @@ class DB_FinancialStatement(MySQLConnector):
         df = self.get_revenue_growth(df) # 매출성장률
         df = self.get_interest_coverage_ratio(df) # 이자보상배율 : 영업이익이 이자비용을 몇 배나 감당할 수 있는지
         
-        df = df[['Date', 'Symbol', 'Sector', 'MarketCap', 'TotalRevenue', 'NetIncome', 'OperatingIncome', 'GrossProfitMargin', 'IncomeGrowth', 'PSR', 'GP/A', 'EV/EBIT', 'PER','CurrentRatio','PBR', 'DebtToEquityRatio', 'PCR', 'PFCR', 'ROE','OperatingMargin', 'FreeCashFlowMargin','RevenueGrowth','InterestCoverageRatio']]
+        df = df[['Date', 'Symbol', 'Sector', 'MarketCap', 'Close', 'DilutedEPS', 'TotalRevenue', 'NetIncome', 
+                 'OperatingIncome', 'GrossProfitMargin', 'IncomeGrowth', 'PSR', 'GP/A', 'EV/EBIT', 'PER',
+                 'CurrentRatio','PBR', 'DebtToEquityRatio', 'PCR', 'PFCR', 'ROE','OperatingMargin', 
+                 'FreeCashFlowMargin','RevenueGrowth','InterestCoverageRatio']]
+        
         df = df.dropna(subset=["MarketCap"])
         df = df.infer_objects(copy=False)
 
         return df
     
+
+    #------------------------
+    # 벨류 펙터 데이터 반환 (PER, PBR, PCR, PSR, PFCR, LiquidationValue, EV/EVIT)
+    #------------------------
+    def get_value_data(self, df):
+        df = self.get_per(df)
+        df = self.get_pbr(df)
+        df = self.get_pcr(df)
+        df = self.get_psr(df)
+        df = self.get_pfcr(df)
+        df = self.get_liquidation_value(df) # 청산가치
+        df = self.get_ev_ebit(df)
+        df = df[['Date', 'Symbol', 'Sector', 'MarketCap', 'Close', 'NetIncome', 'PER','PBR','PCR','PSR','PFCR', 'LiquidationValue', 'EV/EBIT']]
+        return df
+
+
 
     #----------------
     # 스코어링 리스트 조회 (연간/분기)
@@ -1564,3 +1578,89 @@ class DB_FinancialStatement(MySQLConnector):
             final_df.columns = column_names
             final_df.to_csv(f'rank_top_qurter_{datetime.now()}.csv', index= True)
             display(final_df)
+
+    
+    # NCVA 전략
+    # 아래의 조건에 맞는 종목 찾기
+    #   1. 유동자산 - 총부채 > 시가총액
+    #   2. 분기 수익률 > 0
+    # * 1,2번 조건에 맞는 주식들 중에서 (유동자산 - 총부채) / 시가총액 비중이 가장 높은 주식 매수하기
+    # 왜? "유동자산 - 총부채 > 시가총액" 이 저평가?
+    #  - 기업이 청산되고 남은 현금자산이 시총보다 높다는 이야기
+    #  - 즉, 주식시장에서 기업의 가치를 그 기업의 자산보다 낮게 측정했다는 뜻. 
+    @staticmethod
+    def get_rank_table_from_fs(
+        csv_file_name: str,
+        loaded: bool,
+        filter_fn: Callable[[pd.DataFrame], pd.DataFrame],
+        sort_key_fn: Callable[[pd.DataFrame], pd.Series],
+        top_n: int = 20
+    ) -> pd.DataFrame:
+        """
+        공통 랭킹 테이블 생성 함수.
+
+        Parameters:
+            csv_file_name: 저장/불러올 CSV 파일명
+            loaded: True면 CSV 불러오기, False면 새로 생성
+            filter_fn: df -> filtered_df (필터 조건 함수)
+            sort_key_fn: df -> pd.Series (정렬 기준 함수)
+            top_n: 상위 몇 개 종목만 가져올지
+        
+        Returns:
+            pd.DataFrame: 쿼터별 상위 심볼 테이블
+        """
+
+        if loaded:
+            result_df = pd.read_csv(csv_file_name)
+            result_df = result_df.drop(columns=['Unnamed: 0'], errors='ignore')
+            return result_df
+
+        else:
+            with DB_FinancialStatement() as fs:
+                symbols = fs.get_symbol_list()
+                df = fs.get_fs_all(symbols, EDateType.QUARTER)
+                df = fs.get_value_data(df)
+                df = DB_FinancialStatement.add_quarter_column(df)
+
+                df = filter_fn(df).copy()  # 필터링
+                df['__sort_key__'] = sort_key_fn(df)  # 정렬 기준 컬럼 추가
+
+                group_dfs = [group for _, group in df.groupby('Quarter')]
+
+                group_dict = {}
+                max_len = 0
+
+                for group in group_dfs:
+                    quarter = group.iloc[0]['Quarter']
+                    top_symbols = group.sort_values(by='__sort_key__', ascending=False)['Symbol'].tolist()
+                    top_symbols = top_symbols[:top_n]
+                    group_dict[quarter] = top_symbols
+                    max_len = max(max_len, len(top_symbols))
+
+                # 길이 맞추기 (NaN 채우기)
+                for key, value in group_dict.items():
+                    value.extend([np.nan] * (max_len - len(value)))
+
+                result_df = pd.DataFrame(group_dict)
+                result_df.to_csv(csv_file_name, index=False)
+
+                return result_df
+            
+
+    def get_ncva_rank_table(loaded=True) -> pd.DataFrame:
+        return DB_FinancialStatement.get_rank_table_from_fs(
+            csv_file_name='naive_ncva.csv',
+            loaded=loaded,
+            filter_fn=lambda df: df[(df['LiquidationValue'] > df['MarketCap']) & (df['NetIncome'] > 0)],
+            sort_key_fn=lambda df: df['LiquidationValue'] / df['MarketCap'],
+            top_n=20
+        )
+
+    def get_super_value_rank_table(loaded=True) -> pd.DataFrame:
+        return DB_FinancialStatement.get_rank_table_from_fs(
+            csv_file_name='super_value.csv',
+            loaded=loaded,
+            filter_fn=lambda df: df,  # 필터 없음
+            sort_key_fn=lambda df: ((1 / df['PER']) + (1 / df['PBR']) + (1 / df['PCR']) + (1 / df['PSR'])) / 4,
+            top_n=20
+        )

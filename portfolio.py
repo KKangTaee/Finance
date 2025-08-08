@@ -8,6 +8,9 @@ from dateutil.relativedelta import relativedelta
 from assetAllocation import AssetAllocation
 from IPython.display import display
 
+import commonHelper
+from db_financialStatement import DB_FinancialStatement
+
 
 class Portfolio:
     def plot_balance_over_time(df):
@@ -134,12 +137,45 @@ class Portfolio:
         df = AssetAllocation.filter_close_last_month(df)
         df = AssetAllocation.stragey_daa(df)
         return df
+    
+
+    def nvca(start_date, end_date):
+        df_ncva_rank = DB_FinancialStatement.get_ncva_rank_table()
+        symbols = list(set(val for val in df_ncva_rank.values.ravel() if pd.notna(val)))
+        quarter_list = df_ncva_rank.columns.to_list()
+
+        date_dict = commonHelper.get_date_dict_by_quarter_lazy(quarter_list)
+        date_dict = commonHelper.get_trimmed_date_dict(date_dict, start_date, end_date)
+        date_dict = commonHelper.adjust_start_data_dict_by_quarter(date_dict, quarter_list[0])
+        oldest, latest = commonHelper.get_date_range_from_quarters(date_dict)
+
+        df = AssetAllocation.get_stock_data_with_ma(symbols=symbols, start_date=oldest, end_date=latest, mas=[10], type='ma_month')
+        df = AssetAllocation.filter_close_last_month(df)
+        df = AssetAllocation.strategy_ncva(df, df_ncva_rank, date_dict)
+
+        return df
+    
+
+    def super_value(start_date, end_date):
+        df_ncva_rank = DB_FinancialStatement.get_super_value_rank_table()
+        symbols = list(set(val for val in df_ncva_rank.values.ravel() if pd.notna(val)))
+        quarter_list = df_ncva_rank.columns.to_list()
+
+        date_dict = commonHelper.get_date_dict_by_quarter_lazy(quarter_list)
+        date_dict = commonHelper.get_trimmed_date_dict(date_dict, start_date, end_date)
+        date_dict = commonHelper.adjust_start_data_dict_by_quarter(date_dict, quarter_list[0])
+        oldest, latest = commonHelper.get_date_range_from_quarters(date_dict)
+
+        df = AssetAllocation.get_stock_data_with_ma(symbols=symbols, start_date=oldest, end_date=latest, mas=[10], type='ma_month')
+        df = AssetAllocation.filter_close_last_month(df)
+        df = AssetAllocation.strategy_ncva(df, df_ncva_rank, date_dict)
+        
+        return df
 
 
-
-    def show_portfolio():
+    def show_portfolio_eft():
         start_date = '2013-12-01'
-        end_date = '2025-07-17'
+        end_date = '2025-08-04'
         allocations = [
             {'Harry Brown': Portfolio.harry_browne_permanent_portfolio(start_date, end_date)},
             {'Ray Dailo' : Portfolio.ray_dalio_all_seasons(start_date, end_date)},
@@ -161,24 +197,21 @@ class Portfolio:
             display(AssetAllocation.get_performance(df, name))
 
 
-    #-----------------
-    # 분기 재무재표를 통한 top N개의 분할 포트폴리오 구성
-    #-----------------
-    def show_portfolio_by_fs_quarter():
-        df = pd.read_csv('2025-Q1_rank_01.csv')
-        df = df.drop(columns=['Unnamed: 0'])
+    def show_portfolio_stock():
+        start_date = '2013-12-01'
+        end_date = '2025-08-04'
+        allocations = [
+            {'NVAC': Portfolio.nvca(start_date, end_date)},
+            {'Super Value':Portfolio.super_value(start_date,end_date)}
+        ]
 
-        symbols = df['Symbol'].to_list()[:20]
-        start_date = "2025-05-30"
-        end_date = "2025-07-18"
+        Portfolio.plot_multiple_balances_over_time([list(d.values())[0] for d in allocations],
+            [list(d.keys())[0] for d in allocations])
+        
+        for pair in allocations:
+            name = list(pair.keys())[0]
+            df = list(pair.values())[0]
+            display(AssetAllocation.get_performance(df, name))
 
-        n = len(symbols)
-        base = 100 // n
-        remainder = 100 % n
-        ratios = [base + 1 if i < remainder else base for i in range(n)]
 
-        df = AssetAllocation.get_stock_data_with_ma(symbols=symbols, start_date=start_date, end_date=end_date, mas=[10], type='ma_month')
-        df = AssetAllocation.filter_close_last_month(df)
-        df = AssetAllocation.strategy_evenly(df, ratios=ratios, interval=12)
-
-        display(df)
+    

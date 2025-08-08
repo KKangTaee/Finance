@@ -1,6 +1,7 @@
 from enum import Enum
 from datetime import datetime, timedelta
 import pandas as pd
+from matplotlib.dates import relativedelta
 
 # Enum문
 
@@ -155,7 +156,6 @@ class DBName:
 
 
 
-
 def getStrFinancialStatementType(type):
     if type == EFinancialStatementType.INCOME_STATEMENT:
         return "IncomeStatement"
@@ -191,6 +191,7 @@ def get_first_and_last_date(date_obj):
     end = next_month - timedelta(days=1)
     
     return start.date(), end.date()
+
 
 
 def get_sector_weights_dict():
@@ -332,3 +333,182 @@ def get_sector_weights_dict():
         }
     }
     return sector_weights
+
+
+
+#--------------------
+# 분기리스트 넣으면, 딕셔너리로 범위 반환 (일반)
+#--------------------
+def get_data_dict_by_quarter_normal(quarter_list : list):
+        # 분기별 시작일과 종료일 매핑
+    quarter_date_map = {
+        "Q1": ("01-01", "03-31"),
+        "Q2": ("04-01", "06-30"),
+        "Q3": ("07-01", "09-30"),
+        "Q4": ("10-01", "12-31")
+    }
+
+    date_dict = {}
+    for q in quarter_list:
+        year, quarter = q.split("-")  # 예: "2024-Q1" → year = "2024", quarter = "Q1"
+        if quarter in quarter_date_map:
+            start_suffix, end_suffix = quarter_date_map[quarter]
+            start_date = f"{year}-{start_suffix}"
+            end_date = f"{year}-{end_suffix}"
+            date_dict[q] = [start_date, end_date]
+        else:
+            # 예외 처리: 잘못된 quarter 값
+            date_dict[q] = [None, None]
+
+    return date_dict
+
+
+def get_date_dict_by_quarter_lazy(quarter_list : list):
+    # 분기별 시작일과 종료일 매핑
+    quarter_date_map = {
+        "Q1": ("06-01", "08-31"),
+        "Q2": ("09-01", "11-30"),
+        "Q3": ("12-01", "03-31"),
+        "Q4": ("04-01", "05-31")
+    }
+
+    date_dict = {}
+    for q in quarter_list:
+        year, quarter = q.split("-")  # 예: "2024-Q1" → year = "2024", quarter = "Q1"
+        if quarter in quarter_date_map:
+            start_suffix, end_suffix = quarter_date_map[quarter]
+            
+            year_int = int(year)
+            if quarter == 'Q3':
+                start_year = year_int
+                end_year = year_int + 1
+            elif quarter == 'Q4':
+                start_year = year_int + 1 
+                end_year = year_int +1
+            else:
+                start_year = year_int
+                end_year = year_int
+
+            start_date = f"{start_year}-{start_suffix}"
+            end_date = f"{end_year}-{end_suffix}"
+            date_dict[q] = [start_date, end_date]
+        else:
+            # 예외 처리: 잘못된 quarter 값
+            date_dict[q] = [None, None]
+
+    return date_dict
+
+
+def get_date_dict_by_quarter_except_Q4(quarter_list: list):
+    quarter_date_map = {
+        "Q1": ("06-01", "08-31"),
+        "Q2": ("09-01", "11-30"),
+        "Q3": ("12-01", "05-31")  # 종료일이 다음 해
+    }
+
+    date_dict = {}
+    for q in quarter_list:
+        year, quarter = q.split("-")  # 예: "2024-Q3"
+        year = int(year)
+        
+        if quarter in quarter_date_map:
+            start_suffix, end_suffix = quarter_date_map[quarter]
+            start_year = year
+            # Q3은 종료 연도가 +1 되어야 함
+            end_year = year + 1 if quarter == "Q3" else year
+
+            start_date = f"{start_year}-{start_suffix}"
+            end_date = f"{end_year}-{end_suffix}"
+            date_dict[q] = [start_date, end_date]
+        else:
+            date_dict[q] = [None, None]
+
+    return date_dict
+
+
+#--------------
+# date_dict에서 가장 오래된, 가장 최신의 날짜 값 반환
+#--------------
+def get_date_range_from_quarters(date_dict: dict):
+    start_dates = []
+    end_dates = []
+  
+    for start, end in date_dict.values():
+        if start and end:
+            start_dates.append(
+                datetime.strptime(start, "%Y-%m-%d") if isinstance(start, str) else start
+            )
+            end_dates.append(
+                datetime.strptime(end, "%Y-%m-%d") if isinstance(end, str) else end
+            )
+
+    if not start_dates or not end_dates:
+        return None, None  # 유효한 날짜가 없는 경우
+
+    oldest = min(start_dates).strftime("%Y-%m-%d")
+    latest = max(end_dates).strftime("%Y-%m-%d")
+
+    return oldest, latest
+
+
+#------------------
+# start_date, end_date 값을 바탕으로, date_dict에 있는 값을 조정
+#------------------
+def get_trimmed_date_dict(date_dict, start_date, end_date):
+
+    start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+    end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+
+    result = {}
+
+    for quarter, (start_str, end_str) in date_dict.items():
+        q_start = datetime.strptime(start_str, "%Y-%m-%d")
+        q_end = datetime.strptime(end_str, "%Y-%m-%d")
+
+        # 현재 분기가 범위와 겹치는지 확인
+        if end_dt < q_start or start_dt > q_end:
+            continue
+
+        # 교집합 범위 계산
+        new_start = max(start_dt, q_start)
+        new_end = min(end_dt, q_end)  # ← 여기서 end_dt가 q_end보다 클 경우에도 min을 써서 자름
+
+        result[quarter] = [new_start.strftime("%Y-%m-%d"), new_end.strftime("%Y-%m-%d")]
+
+    # 👉 마지막 분기라면 end_date를 직접 반영
+    if result:
+        last_key = list(result.keys())[-1]
+        last_end = datetime.strptime(result[last_key][1], "%Y-%m-%d")
+        if end_dt > last_end:
+            result[last_key][1] = end_dt.strftime("%Y-%m-%d")
+
+    return result
+
+
+#-----------------
+# 지정된 쿼터값을 통해 그 쿼터의 start 날짜를 한달 전으로 이동 (시작날짜 처리용도)
+#-----------------
+def adjust_start_data_dict_by_quarter(date_dict: dict, first_quarter: list) -> dict:
+    """
+    1. date_dict의 문자열 날짜들을 datetime 객체로 변환
+    2. 첫 번째 분기(quarter_list[0])의 시작 날짜를 한 달 앞당김
+
+    Parameters:
+        date_dict (dict): {'Q1': ['2023-01-01', '2023-03-31'], ...} 형식의 딕셔너리
+        quarter_list (list): 분기 이름 리스트, 예: ['Q1', 'Q2', ...]
+
+    Returns:
+        dict: 변환 및 조정된 date_dict
+    """
+    # 날짜 문자열을 datetime 객체로 변환
+    for key, value_list in date_dict.items():
+        for i in range(len(value_list)):
+            value_list[i] = datetime.strptime(value_list[i], "%Y-%m-%d")
+
+    # 첫 분기의 시작 날짜를 1개월 앞당김
+    # first_quarter = quarter_list[0]
+    first_start, first_end = date_dict[first_quarter]
+    new_first_start = first_start - relativedelta(months=1)
+    date_dict[first_quarter] = [new_first_start, first_end]
+
+    return date_dict
