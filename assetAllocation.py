@@ -21,15 +21,23 @@ class AssetAllocation:
     @staticmethod
     def get_dividends(symbols:list):
         result_dfs = {}
-
+        no_dividends_symbols = []
         for symbol in symbols:
             info = yf.Ticker(symbol)
             df = info.actions.reset_index()
+
+            if df.empty:
+                no_dividends_symbols.append(symbol)
+                result_dfs[symbol] = pd.DataFrame(columns=['Date','Symbol','Dividends'])
+                continue
+
             df['Date'] = df['Date'].dt.date # 년월일만 남김
             df['Symbol'] = symbol
             df = df[['Date','Symbol','Dividends']]
             result_dfs[symbol]=df
 
+        if len(no_dividends_symbols) > 0:
+            print(f'[get_dividend] 배당 데이터 없음 : {no_dividends_symbols}')
         return result_dfs
     
 
@@ -67,10 +75,14 @@ class AssetAllocation:
             df_symbol['Date'] = pd.to_datetime(df_symbol['Date'])
 
             df_dividends = dividends_dfs[symbol]
-            df_dividends['Date'] = pd.to_datetime(df_dividends['Date'])
 
-            # 배당데이터 병합
-            df_symbol = df_symbol.merge(df_dividends, on=['Date','Symbol'], how = 'left')
+            # 배당데이터 병합 (df_diviends 값이 0일수 있음. -- 최근 yfinance 패치로 인해)
+            if len(df_dividends) > 0:
+                df_dividends['Date'] = pd.to_datetime(df_dividends['Date'])
+                df_symbol = df_symbol.merge(df_dividends, on=['Date','Symbol'], how = 'left')
+            else:
+                df_symbol['Dividends'] = 0.0
+
             df_symbol.fillna(0, inplace=True)
             result_dfs[symbol] = df_symbol
 
@@ -1038,7 +1050,7 @@ class AssetAllocation:
     # 아래의 조건에 맞는 종목 찾기
     #   1. 유동자산 - 총부채 > 시가총액
     #   2. 분기 수익률 > 0
-    #   3. 1,2번 조건에 맞는 주식들 중에서 (유동자산 - 총부채) / 시가총액 비중이 가장 높은 주식 매수하기
+    # * 1,2번 조건에 맞는 주식들 중에서 (유동자산 - 총부채) / 시가총액 비중이 가장 높은 주식 매수하기
     # * df_ncva 에 랭크 데이터가 들어옴.
     def strategy_ncva(symbols_dfs:dict, df_ncva_rank:pd.DataFrame, date_dict:dict, init_balance = 10000):
 

@@ -171,11 +171,44 @@ class Portfolio:
         df = AssetAllocation.strategy_ncva(df, df_ncva_rank, date_dict)
         
         return df
+    
+
+    def new_magic(start_date, end_date):
+        df_ncva_rank = DB_FinancialStatement.get_new_magic_rank_table()
+        symbols = list(set(val for val in df_ncva_rank.values.ravel() if pd.notna(val)))
+        quarter_list = df_ncva_rank.columns.to_list()
+
+        date_dict = commonHelper.get_date_dict_by_quarter_lazy(quarter_list)
+        date_dict = commonHelper.get_trimmed_date_dict(date_dict, start_date, end_date)
+        date_dict = commonHelper.adjust_start_data_dict_by_quarter(date_dict, quarter_list[0])
+        oldest, latest = commonHelper.get_date_range_from_quarters(date_dict)
+
+        df = AssetAllocation.get_stock_data_with_ma(symbols=symbols, start_date=oldest, end_date=latest, mas=[10], type='ma_month')
+        df = AssetAllocation.filter_close_last_month(df)
+        df = AssetAllocation.strategy_ncva(df, df_ncva_rank, date_dict)
+        
+        return df
+    
+    def f_score(start_date, end_date):
+        df_ncva_rank = DB_FinancialStatement.get_f_score_rank_table()
+        symbols = list(set(val for val in df_ncva_rank.values.ravel() if pd.notna(val)))
+        quarter_list = df_ncva_rank.columns.to_list()
+
+        date_dict = commonHelper.get_date_dict_by_quarter_lazy(quarter_list)
+        date_dict = commonHelper.get_trimmed_date_dict(date_dict, start_date, end_date)
+        date_dict = commonHelper.adjust_start_data_dict_by_quarter(date_dict, quarter_list[0])
+        oldest, latest = commonHelper.get_date_range_from_quarters(date_dict)
+
+        df = AssetAllocation.get_stock_data_with_ma(symbols=symbols, start_date=oldest, end_date=latest, mas=[10], type='ma_month')
+        df = AssetAllocation.filter_close_last_month(df)
+        df = AssetAllocation.strategy_ncva(df, df_ncva_rank, date_dict)
+        
+        return df
 
 
     def show_portfolio_eft():
         start_date = '2013-12-01'
-        end_date = '2025-08-04'
+        end_date = '2025-08-07'
         allocations = [
             {'Harry Brown': Portfolio.harry_browne_permanent_portfolio(start_date, end_date)},
             {'Ray Dailo' : Portfolio.ray_dalio_all_seasons(start_date, end_date)},
@@ -202,7 +235,9 @@ class Portfolio:
         end_date = '2025-08-04'
         allocations = [
             {'NVAC': Portfolio.nvca(start_date, end_date)},
-            {'Super Value':Portfolio.super_value(start_date,end_date)}
+            {'Super Value':Portfolio.super_value(start_date,end_date)},
+            {'New Magic':Portfolio.new_magic(start_date,end_date)},
+            {'F Score' : Portfolio.f_score(start_date, end_date)}
         ]
 
         Portfolio.plot_multiple_balances_over_time([list(d.values())[0] for d in allocations],
@@ -214,4 +249,8 @@ class Portfolio:
             display(AssetAllocation.get_performance(df, name))
 
 
-    
+    # OperatingCashFlow
+    #
+
+    # 신규주식발행(유상증자)
+    # 자산회전율

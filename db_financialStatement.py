@@ -16,6 +16,7 @@ import pymysql
 import pandas as pd
 import commonHelper as ch
 import numpy as np
+import warnings
 
 # 재무재표 DB 데이터 조회
 class DB_FinancialStatement(MySQLConnector):
@@ -84,43 +85,23 @@ class DB_FinancialStatement(MySQLConnector):
         return symbols
     
 
-    def getSymbolListByFilter(self, min_year = 0):
-
-        if min_year == 0:
-            # N년전 1월 1일 반환
-            now = datetime.now()
-            target_year = now.year - 4 
-            years_ago = datetime(year=target_year, month=1,day=1,hour=0,minute=0,second=0)
-        else:
-            years_ago = datetime(year=min_year, month=1,day=1,hour=0,minute=0,second=0)
-
-        years_ago_ms = int(years_ago.timestamp()*1000)
-        print(f"{years_ago} 이전 상장된 기업 추출")
-
+    def get_symbol_list(self, min_year:int = 0):
         symbols = []
-        query = f"""
-            SELECT symbol
-            FROM Company
-            WHERE isSpec IS NOT NULL
-            AND isSpec != 1
-            AND firstTradeDateMilliseconds IS NOT NULL
-            AND firstTradeDateMilliseconds < {years_ago_ms};
-        """
-
-        df = super().requestToDB(query, ['symbol'])
-        symbols = [row['symbol'] for _, row in df.iterrows()]
-        return symbols
-    
-
-    def get_symbol_list(self):
-        symbols = []
-        query = f"""
+        base_query = f"""
             SELECT symbol
             FROM Company
             WHERE isSpec != 1
-            AND (country IS NULL OR country != 'china');
+            AND (country IS NULL OR country != 'china')
         """
 
+        if min_year > 0:
+            years_ago = datetime(min_year, 1, 1)
+            years_ago_ms = int(years_ago.timestamp()*1000)
+            query = base_query + f"\n          AND firstTradeDateMilliseconds < {int(years_ago_ms)}"
+        else:
+            query = base_query
+
+        query += ";"
         df = super().requestToDB(query, ['symbol'])
         symbols = [row['symbol'] for _, row in df.iterrows()]
         return symbols
@@ -496,6 +477,8 @@ class DB_FinancialStatement(MySQLConnector):
             # 유동부채가 0이 아니면 유동비율 계산
             if current_liabilities is not None and current_liabilities > 0:
                 df.at[idx, 'CurrentRatio'] = current_assets / current_liabilities
+            else:
+                df.at[idx, 'CurrentRatio'] = 0.0
 
         return df
     
@@ -547,6 +530,8 @@ class DB_FinancialStatement(MySQLConnector):
             # 차입금비율 계산 (TotalCapitalization > 0)
             if total_capitalization is not None and total_capitalization > 0:
                 df.at[idx, 'DebtToEquityRatio'] = total_debt / total_capitalization
+            else:
+                df.at[idx, 'DebtToEquityRatio'] = 0.0
 
         return df
     
@@ -677,28 +662,32 @@ class DB_FinancialStatement(MySQLConnector):
         """
         
         # 필요한 컬럼 확인
-        required_columns = ['GrossProfit', 'TotalRevenue', 'OperatingRevenue']
+        required_columns = ['GrossProfit', 'TotalRevenue']
         if not any(col in df.columns for col in required_columns):
             return None
 
         df = df.copy()
-        df['Revenue'] = None
+        # df['Revenue'] = None
         df['GrossProfitMargin'] = None
 
         # Revenue 설정 우선순위: TotalRevenue > OperatingRevenue
         for idx in range(len(df)):
-            if 'TotalRevenue' in df.columns and pd.notnull(df.at[idx, 'TotalRevenue']):
-                df.at[idx, 'Revenue'] = df.at[idx, 'TotalRevenue']
-            elif 'OperatingRevenue' in df.columns and pd.notnull(df.at[idx, 'OperatingRevenue']):
-                df.at[idx, 'Revenue'] = df.at[idx, 'OperatingRevenue']
-            else:
-                continue  # 둘 다 없으면 넘어감
+            # if 'TotalRevenue' in df.columns and pd.notnull(df.at[idx, 'TotalRevenue']):
+            #     df.at[idx, 'Revenue'] = df.at[idx, 'TotalRevenue']
+            # elif 'OperatingRevenue' in df.columns and pd.notnull(df.at[idx, 'OperatingRevenue']):
+            #     df.at[idx, 'Revenue'] = df.at[idx, 'OperatingRevenue']
+            # else:
+            #     continue  # 둘 다 없으면 넘어감
 
             gross_profit = df.at[idx, 'GrossProfit']
-            revenue = df.at[idx, 'Revenue']
+            revenue = df.at[idx, 'TotalRevenue']
 
-            if gross_profit is not None and revenue and revenue != 0:
-                df.at[idx, 'GrossProfitMargin'] = gross_profit / revenue
+            df.at[idx, 'GrossProfitMargin'] = (
+                gross_profit / revenue
+                if pd.notna(gross_profit) and pd.notna(revenue) and revenue != 0
+                else 0.0
+            )
+                
 
         return df
     
@@ -736,6 +725,23 @@ class DB_FinancialStatement(MySQLConnector):
 
             if net_income is not None and equity and equity != 0:
                 df.at[idx, 'ROE'] = net_income / equity
+
+        return df
+    
+
+    def get_roa(self, df:pd.DataFrame) -> pd.DataFrame:
+        required_columns = ['NetIncome', 'TotalAssets']
+        if not all(col in df.columns for col in required_columns):
+            return None
+        
+        df = df.copy()
+        df['ROA'] = None
+        for idx in range(len(df)):
+            net_income = df.at[idx, 'NetIncome']
+            total_assets = df.at[idx, 'TotalAssets']
+
+            if net_income is not None and total_assets and total_assets != 0:
+                df.at[idx, 'ROA'] = net_income / total_assets
 
         return df
     
@@ -806,6 +812,24 @@ class DB_FinancialStatement(MySQLConnector):
 
         return df
     
+
+    def get_asset_turnover_ratio(self, df:pd.DataFrame) -> pd.DataFrame:
+
+        required_columns = ['TotalAssets', 'TotalRevenue']
+        if not all(col in df.columns for col in required_columns):
+            return None
+        
+
+        df = df.copy()
+        df['AssetTurnoverRatio'] = None
+        for idx in range(len(df)):
+            total_revenue = df.at[idx, 'TotalRevenue']
+            total_assets = df.at[idx, 'TotalAssets']
+
+            if total_revenue is not None and total_assets and total_assets != 0:
+                df.at[idx, 'AssetTurnoverRatio'] =  total_revenue / total_assets
+
+        return df
 
 
     # 이자보상배율 : 기업이 영업이익으로 이자비용을 얼마나 잘 갚을 수 있는지 나타내는 지표
@@ -919,6 +943,27 @@ class DB_FinancialStatement(MySQLConnector):
         df = self.get_ev_ebit(df)
         df = df[['Date', 'Symbol', 'Sector', 'MarketCap', 'Close', 'NetIncome', 'PER','PBR','PCR','PSR','PFCR', 'LiquidationValue', 'EV/EBIT']]
         return df
+
+    #-------------------------
+    # 퀄리티 데이터
+    #-------------------------
+    def get_quality_date(self, df):
+        df = self.get_gp_a(df)
+        df = self.get_roa(df)
+        df = self.get_current_ratio(df)
+        df = self.get_debt_to_equity_ratio(df)
+        df = self.get_asset_turnover_ratio(df)
+        df = self.get_gross_profit_margin(df)
+        df = df[['Date', 'Symbol', 'Sector', 'MarketCap', 'Close', 'NetIncome', 'OperatingCashFlow', 'CommonStockIssuance', 'NetCommonStockIssuance', 'GP/A', 'ROA', 'CurrentRatio', 'DebtToEquityRatio', 'AssetTurnoverRatio', 'GrossProfitMargin']]
+        return df
+    
+
+    def get_fs_data(self, df):
+        df_value = self.get_value_data(df)
+        df_quality =self.get_quality_date(df)
+
+        df_merged = pd.merge(df_value, df_quality, on=['Date', 'Symbol', 'Sector', 'MarketCap', 'Close'])
+        return df_merged
 
 
 
@@ -1461,6 +1506,42 @@ class DB_FinancialStatement(MySQLConnector):
 
         return valid_symbols
     
+    
+    #------------------------
+    # 넘겨받은 데이터 프레임의 date를 검사해, 나올수 있는 값을 모두 확인
+    # 그 다음이, 그 값을 모두 가지고 있는 심볼들의 row만 남기도록 함.
+    # ex. TSLA는 2022,2023,2024
+    # AMD는 2022,2023,2024
+    # A는 2022 있다면?
+    # 결과적으로는 TSLA, AMD만 남김
+    #-------------------------
+    def filter_symbols_with_all_dates(df: pd.DataFrame) -> pd.DataFrame:
+        # 1. Date 컬럼의 모든 고유값 추출
+        all_dates = set(df['Date'].unique())
+
+        # 2. 심볼별 Date 세트 만들기
+        symbol_dates = df.groupby('Symbol')['Date'].apply(set)
+
+        # 3. 모든 날짜를 포함한 심볼만 필터링
+        symbols_to_keep = symbol_dates[symbol_dates.apply(lambda dates: all_dates.issubset(dates))].index
+
+        # 4. 해당 심볼만 남긴 DataFrame 반환
+        return df[df['Symbol'].isin(symbols_to_keep)].reset_index(drop=True)
+
+    
+    
+    def filter_remove_same_year(df:pd.DataFrame) -> pd.DataFrame:
+        df = df.copy()
+        df['Year'] = df['Date'].dt.year
+
+        idx = df.groupby(['Symbol','Year'])['Date'].idxmin()
+        df_result = df.loc[idx].copy()
+        df_result = df_result.reset_index(drop=True)
+        df_result = df_result.sort_values(['Symbol','Year'])
+        df_result.drop(columns=['Year'], inplace=True)
+
+        return df_result
+
 
     #----------------------------
     # 2024-Qn 이런식으로 Quarter 컬럼 구현
@@ -1537,7 +1618,8 @@ class DB_FinancialStatement(MySQLConnector):
             quarters = DB_FinancialStatement.generate_quarter_range(start_quarter, end_quarter) # 범위 리스트 구하기
             min_year = int(quarters[3].split('-Q')[0]) - 3 # 필터 된 날짜.
 
-            symbols = fs.getSymbolListByFilter(min_year) # 필터링된 날짜까지만 추출
+            # symbols = fs.getSymbolListByFilter(min_year) # 필터링된 날짜까지만 추출
+            symbols = fs.get_symbol_list(min_year)
             print(f"{min_year} 이전 상장 티커 수 : {len(symbols)}")
 
             df_year = fs.get_data(symbols, EDateType.YEAR, min_year)
@@ -1580,14 +1662,7 @@ class DB_FinancialStatement(MySQLConnector):
             display(final_df)
 
     
-    # NCVA 전략
-    # 아래의 조건에 맞는 종목 찾기
-    #   1. 유동자산 - 총부채 > 시가총액
-    #   2. 분기 수익률 > 0
-    # * 1,2번 조건에 맞는 주식들 중에서 (유동자산 - 총부채) / 시가총액 비중이 가장 높은 주식 매수하기
-    # 왜? "유동자산 - 총부채 > 시가총액" 이 저평가?
-    #  - 기업이 청산되고 남은 현금자산이 시총보다 높다는 이야기
-    #  - 즉, 주식시장에서 기업의 가치를 그 기업의 자산보다 낮게 측정했다는 뜻. 
+
     @staticmethod
     def get_rank_table_from_fs(
         csv_file_name: str,
@@ -1647,6 +1722,168 @@ class DB_FinancialStatement(MySQLConnector):
                 return result_df
             
 
+    @staticmethod
+    def get_f_score_rank_quarter_table(loaded = True):
+
+        csv_file_name = 'f_score_rank_quarter.csv'
+
+        if loaded:
+            result_df = pd.read_csv(csv_file_name)
+            result_df = result_df.drop(columns=['Unnamed: 0'], errors='ignore')
+            return result_df
+        
+        else:
+            with DB_FinancialStatement() as fs:
+                symbols = fs.get_symbol_list(2021)
+                df_year = fs.get_fs_all(symbols, EDateType.YEAR)
+                df_year = DB_FinancialStatement.filter_remove_same_year(df_year)
+
+                df_year = fs.get_quality_date(df_year)
+                df_year['Date'] = df_year['Date'].dt.year
+
+                years = {2021, 2022, 2023, 2024}
+                df_year = df_year.groupby('Symbol').filter(lambda x: years.issubset(set(x['Date'])))
+                df_year = df_year[df_year['Date'].isin(years)]
+
+                grouped = df_year.groupby('Symbol')
+                symbol_dfs = {}
+                for symbol, df in grouped:
+                    df = df.reset_index(drop= True)
+                    dict_score = {
+                        'Date' : [],
+                        'Symbol' : [],
+                        'Sector' : [],
+                        'F_Score': []
+                    }
+
+                    for idx in range(1, len(df)):
+                        
+                        score = 0
+                        
+                        # 전년 당기순이익 0 이상
+                        net_income = df.at[idx, 'NetIncome']
+                        if net_income > 0:
+                            score+=1
+                        
+                        # 전년 영업현금흐름
+                        operating_cash_flow = df.at[idx, 'OperatingCashFlow']
+                        if operating_cash_flow > 0:
+                            score+=1
+
+                        # ROA 전년 대비 증가
+                        roa = df.at[idx, 'ROA']
+                        prev_roa = df.at[idx-1, 'ROA']
+                        if roa > prev_roa:
+                            score +=1
+
+                        # 전년 영업현금흐름 순이익보다 증가
+                        if operating_cash_flow > net_income:
+                            score +=1
+
+                        # 부채비율 전년대비 감소
+                        debt_to_equity_ratio = df.at[idx, 'DebtToEquityRatio']
+                        prev_debt_to_equity_ratio = df.at[idx-1, 'DebtToEquityRatio']
+                        if debt_to_equity_ratio < prev_debt_to_equity_ratio:
+                            score += 1
+
+                        # 유동비율
+                        current_ratio = df.at[idx, 'CurrentRatio']
+                        prev_current_ratio = df.at[idx-1, 'CurrentRatio']
+                        if current_ratio > prev_current_ratio:
+                            score += 1
+
+                        # 신규주식발행 없음
+                        common_stock_issuance = df.at[idx, 'CommonStockIssuance']
+                        if common_stock_issuance == None or common_stock_issuance == 0:
+                            score += 1
+
+                        # 매출총이익률
+                        gross_profit_margin = df.at[idx, 'GrossProfitMargin']
+                        prev_gross_profit_margin = df.at[idx-1, 'GrossProfitMargin']
+                        if gross_profit_margin > prev_gross_profit_margin:
+                            score += 1
+                        
+                        # 자산회전률 전년대비 증가
+                        asset_turnover_ratio = df.at[idx, 'AssetTurnoverRatio']
+                        prev_asset_turnover_ratio = df.at[idx-1, 'AssetTurnoverRatio']
+                        if asset_turnover_ratio > prev_asset_turnover_ratio:
+                            score += 1
+
+                        dict_score['Date'].append(df.at[idx, 'Date'])
+                        dict_score['Symbol'].append(df.at[idx, 'Symbol'])
+                        dict_score['Sector'].append(df.at[idx, 'Sector'])
+                        dict_score['F_Score'].append(score)
+
+                
+                    df = pd.DataFrame(dict_score)
+                    df = df[df['F_Score'] >= 3]
+                    symbol_dfs[symbol] = df
+            
+
+                all_df = pd.concat(symbol_dfs.values(), ignore_index=True)
+                all_df['Date'] = all_df['Date'].astype(int)
+
+                all_df = (all_df
+                    .groupby(['Date', 'Symbol'], as_index=False)['F_Score']
+                    .max())
+                
+                all_df = all_df.sort_values(['Date', 'F_Score', 'Symbol'],
+                                ascending=[True, False, True],
+                                kind="mergesort")
+                
+                year_to_syms = (all_df
+                        .groupby('Date')['Symbol']
+                        .apply(list)
+                        .to_dict())
+
+                # 5) Build a wide DataFrame: columns=years, rows=ranks (0-based then reindex starting at 1)
+                years = sorted(year_to_syms.keys())
+                max_len = max(len(v) for v in year_to_syms.values()) if years else 0
+
+                data = {}
+                for y in years:
+                    col = year_to_syms[y]
+                    # Pad with None to make equal lengths
+                    padded = col + [None] * (max_len - len(col))
+                    data[y] = padded
+
+                wide = pd.DataFrame(data)
+                wide = wide.head(1000) # 1000개만 추려서 사용
+            
+                quarters = ['Q1','Q2','Q3','Q4']
+                dict_quarter = {}
+
+                def in_quarter_range(value, start, end):
+                    def to_key(s):
+                        year, q = s.split('-')
+                        return int(year), int(q[1])  # Q2 → 2
+
+                    return to_key(start) <= to_key(value) <= to_key(end)
+
+                start_quarter = '2023-Q3'
+                end_quarter = '2025-Q2'
+                for year in wide.columns:
+                    for q in quarters:
+                        col = f"{year+1}-{q}"
+                        if in_quarter_range(col, start_quarter,end_quarter):
+                            dict_quarter[col] = wide[year].to_list()
+
+                df = pd.DataFrame(dict_quarter)
+                df.to_csv(csv_file_name, index=False)
+
+            return df
+    
+
+            
+    # NCVA 전략
+    # 아래의 조건에 맞는 종목 찾기
+    #   1. 유동자산 - 총부채 > 시가총액
+    #   2. 분기 수익률 > 0
+    # * 1,2번 조건에 맞는 주식들 중에서 (유동자산 - 총부채) / 시가총액 비중이 가장 높은 주식 매수하기
+    # 왜? "유동자산 - 총부채 > 시가총액" 이 저평가?
+    #  - 기업이 청산되고 남은 현금자산이 시총보다 높다는 이야기
+    #  - 즉, 주식시장에서 기업의 가치를 그 기업의 자산보다 낮게 측정했다는 뜻. 
+    @staticmethod
     def get_ncva_rank_table(loaded=True) -> pd.DataFrame:
         return DB_FinancialStatement.get_rank_table_from_fs(
             csv_file_name='naive_ncva.csv',
@@ -1664,3 +1901,49 @@ class DB_FinancialStatement(MySQLConnector):
             sort_key_fn=lambda df: ((1 / df['PER']) + (1 / df['PBR']) + (1 / df['PCR']) + (1 / df['PSR'])) / 4,
             top_n=20
         )
+    
+    def get_new_magic_rank_table(loaded=True) -> pd.DataFrame:
+        return DB_FinancialStatement.get_rank_table_from_fs(
+            csv_file_name='new_magic.csv',
+            loaded=loaded,
+            filter_fn=lambda df: df,  # 필터 없음
+            sort_key_fn=lambda df:((1/df['PBR']) +(df['GP/A'])),
+            top_n=20
+        )
+    
+    def get_f_score_rank_table(loaded = True) -> pd.DataFrame:
+
+        csv_file_name = 'f_score_with_per.csv'
+        if loaded:
+            result_df = pd.read_csv(csv_file_name)
+            result_df = result_df.drop(columns=['Unnamed: 0'], errors='ignore')
+            return result_df
+
+        else:
+            df_rank = DB_FinancialStatement.get_f_score_rank_quarter_table(False)
+            symbols = pd.unique(df_rank.values.ravel())
+            symbols = [s for s in symbols if pd.notna(s)]
+
+            with DB_FinancialStatement() as fs:
+                df_quarter = fs.get_fs_all(symbols, EDateType.QUARTER)
+                df_quarter = fs.get_value_data(df_quarter)
+                df_quarter = DB_FinancialStatement.add_quarter_column(df_quarter)
+                df_quarter['1/PER'] = 1/df_quarter['PER']
+                df_quarter = df_quarter[df_quarter['Date']== '2023-12-31']    
+
+            
+                dict_df = {}
+                grouped = df_quarter.groupby('Quarter')
+                for idx, group in grouped:
+                    check_symbols = df_rank[idx].dropna().tolist()
+                    df_filter = group[group['Symbol'].isin(check_symbols)]
+                    df_filter = df_filter.sort_values(by='1/PER', ascending=False)
+                    dict_df[idx] = df_filter['Symbol'].tolist()
+                
+                max_len = max(len(v) for v in dict_df.values())
+                padded = {k: v + [None] * (max_len - len(v)) for k, v in dict_df.items()}
+                df = pd.DataFrame(padded)
+                df = df.head(20)
+                df.to_csv(csv_file_name, index=False)
+            
+            return df

@@ -129,11 +129,37 @@ class DataDownloader:
                     conn.commit()
                 print(f"🛠️ {symbol} - 누락된 컬럼 추가 완료: {new_columns}")
 
+            # -------- 기존코드 ------------
+            # with conn.cursor() as cursor:
+            #     columns = ", ".join([f"`{col}`" for col in df.columns])
+            #     placeholders = ", ".join(["%s"] * len(df.columns))
+            #     # update_clause = ", ".join([f"`{col}` = VALUES(`{col}`)" for col in df.columns if col not in ["date", "symbol"]])
+            #     update_clause = ", ".join([f"`{col}` = VALUES(`{col}`)" for col in df.columns])
+            #     insert_sql = f"""
+            #         INSERT INTO {tableName} ({columns})
+            #         VALUES ({placeholders})
+            #         ON DUPLICATE KEY UPDATE {update_clause};
+            #     """
+
+            #     data = [tuple(row) for row in df.itertuples(index=False, name=None)]
+            #     cursor.executemany(insert_sql, data)
+            #     conn.commit()
+
             with conn.cursor() as cursor:
                 columns = ", ".join([f"`{col}`" for col in df.columns])
                 placeholders = ", ".join(["%s"] * len(df.columns))
-                # update_clause = ", ".join([f"`{col}` = VALUES(`{col}`)" for col in df.columns if col not in ["date", "symbol"]])
-                update_clause = ", ".join([f"`{col}` = VALUES(`{col}`)" for col in df.columns])
+
+                # 업데이트에서 제외할 컬럼: PK/UK
+                exclude_from_update = {"Id", "Symbol", "Date"}
+
+                # NULL 방지: 새 값이 NULL이면 기존 값 유지
+                update_cols = [
+                    f"`{col}` = COALESCE(VALUES(`{col}`), `{col}`)"
+                    for col in df.columns
+                    if col not in exclude_from_update
+                ]
+                update_clause = ", ".join(update_cols)
+
                 insert_sql = f"""
                     INSERT INTO {tableName} ({columns})
                     VALUES ({placeholders})
