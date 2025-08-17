@@ -149,7 +149,7 @@ class Portfolio:
         date_dict = commonHelper.adjust_start_data_dict_by_quarter(date_dict, quarter_list[0])
         oldest, latest = commonHelper.get_date_range_from_quarters(date_dict)
 
-        df = AssetAllocation.get_stock_data_with_ma(symbols=symbols, start_date=oldest, end_date=latest, mas=[10], type='ma_month')
+        df = AssetAllocation.get_stock_data_with_ma(symbols=symbols, start_date=oldest, end_date=latest, mas=[10], type='ma_month', use_db_stock=True)
         df = AssetAllocation.filter_close_last_month(df)
         df = AssetAllocation.strategy_ncva(df, df_ncva_rank, date_dict)
 
@@ -166,7 +166,7 @@ class Portfolio:
         date_dict = commonHelper.adjust_start_data_dict_by_quarter(date_dict, quarter_list[0])
         oldest, latest = commonHelper.get_date_range_from_quarters(date_dict)
 
-        df = AssetAllocation.get_stock_data_with_ma(symbols=symbols, start_date=oldest, end_date=latest, mas=[10], type='ma_month')
+        df = AssetAllocation.get_stock_data_with_ma(symbols=symbols, start_date=oldest, end_date=latest, mas=[10], type='ma_month', use_db_stock=True)
         df = AssetAllocation.filter_close_last_month(df)
         df = AssetAllocation.strategy_ncva(df, df_ncva_rank, date_dict)
         
@@ -183,7 +183,7 @@ class Portfolio:
         date_dict = commonHelper.adjust_start_data_dict_by_quarter(date_dict, quarter_list[0])
         oldest, latest = commonHelper.get_date_range_from_quarters(date_dict)
 
-        df = AssetAllocation.get_stock_data_with_ma(symbols=symbols, start_date=oldest, end_date=latest, mas=[10], type='ma_month')
+        df = AssetAllocation.get_stock_data_with_ma(symbols=symbols, start_date=oldest, end_date=latest, mas=[10], type='ma_month', use_db_stock=True)
         df = AssetAllocation.filter_close_last_month(df)
         df = AssetAllocation.strategy_ncva(df, df_ncva_rank, date_dict)
         
@@ -199,7 +199,7 @@ class Portfolio:
         date_dict = commonHelper.adjust_start_data_dict_by_quarter(date_dict, quarter_list[0])
         oldest, latest = commonHelper.get_date_range_from_quarters(date_dict)
 
-        df = AssetAllocation.get_stock_data_with_ma(symbols=symbols, start_date=oldest, end_date=latest, mas=[10], type='ma_month')
+        df = AssetAllocation.get_stock_data_with_ma(symbols=symbols, start_date=oldest, end_date=latest, mas=[10], type='ma_month', use_db_stock=True)
         df = AssetAllocation.filter_close_last_month(df)
         df = AssetAllocation.strategy_ncva(df, df_ncva_rank, date_dict)
         

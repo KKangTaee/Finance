@@ -67,6 +67,32 @@ class DB_Stock(MySQLConnector):
         return df
     
 
+    @staticmethod
+    def get_stock_data(symbols, start_date, end_date):
+        with DB_Stock() as stock:
+            symbols_str =  ",".join(f"'{s}'" for s in symbols)
+            query =f"""
+                SELECT *
+                FROM StockPrices
+                WHERE Symbol In ({symbols_str})
+                    AND Date BETWEEN '{start_date}' AND '{end_date}'
+                ORDER BY Symbol ASC, Date ASC
+                """
+            df = stock.requestToDB(query)
+            df = df.drop(columns=["Id"])
+            df['Dividends'] = 0.0
+            df = df.rename(columns={'Adj_close': 'Adj Close'})
+            grouped = df.groupby('Symbol')
+            
+            symbol_dfs = {}
+            for symbol, df in grouped:
+                df = df.reset_index()
+                df = df.sort_values(by='Date')
+                symbol_dfs[symbol] =df
+
+        return symbol_dfs
+    
+
 
 
     # MDD 구하기

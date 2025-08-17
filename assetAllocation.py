@@ -8,6 +8,7 @@ from time import strptime
 from IPython.display import display
 from curl_cffi import requests
 
+
 pd.set_option('display.max_rows', None)  # 모든 행 출
 pd.set_option('display.max_columns', None)  # 모든 열 출력
 pd.set_option('display.expand_frame_repr', None)  # 긴 데이터 프레임 줄바꿈 없이 출력
@@ -93,11 +94,15 @@ class AssetAllocation:
     # 종가 데이터 가져오기 (배당금 포함)
     #---------------------------
     @staticmethod
-    def get_stock_data_close(symbols:list, start_date, end_date=None, include_diviend=False, key = 'Close'):
-    
+    def get_stock_data_close(symbols:list, start_date, end_date=None, include_diviend=False, key = 'Close', use_db_stock:bool = False):
+        from db_stock import DB_Stock
+
         result_dfs = {}
 
-        symbol_dfs = AssetAllocation.get_stock_data(symbols=symbols, start_date=start_date,end_date=end_date)
+        if use_db_stock:
+            symbol_dfs = DB_Stock.get_stock_data(symbols=symbols, start_date=start_date,end_date=end_date)
+        else:
+            symbol_dfs = AssetAllocation.get_stock_data(symbols=symbols, start_date=start_date,end_date=end_date)
         
         for symbol, df_symbol in symbol_dfs.items():
 
@@ -127,7 +132,7 @@ class AssetAllocation:
     # 이동평균과 함께 데이터 로드
     #----------------------
     @staticmethod
-    def get_stock_data_with_ma(symbols:list, start_date, end_date, mas, type='ma_day'):
+    def get_stock_data_with_ma(symbols:list, start_date, end_date, mas, type='ma_day', use_db_stock:bool = False):
 
         result_dfs = {}
 
@@ -156,10 +161,13 @@ class AssetAllocation:
             print(prev_date)
 
         # 월말 데이터 가져오기
-        symbol_dfs = AssetAllocation.get_stock_data_close(symbols=symbols, start_date=prev_date, end_date=end_date, include_diviend=True, key= 'Close')
+        symbol_dfs = AssetAllocation.get_stock_data_close(symbols=symbols, start_date=prev_date, end_date=end_date, include_diviend=True, key= 'Close', use_db_stock=use_db_stock)
 
         for symbol, df_symbol in symbol_dfs.items():
             df = df_symbol.copy()
+
+            if not pd.api.types.is_datetime64_any_dtype(df['Date']):
+                df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
 
             if type == 'ma_day':
                 for ma in mas:

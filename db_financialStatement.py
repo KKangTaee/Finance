@@ -74,7 +74,7 @@ class DB_FinancialStatement(MySQLConnector):
     #---------------------
     # 심볼(티커) 리스트 가져오기
     #---------------------
-    def getSymbolList(self):
+    def get_symbol_list(self):
         symbols = []
         quary = """
             SELECT symbol FROM Company;
@@ -85,7 +85,7 @@ class DB_FinancialStatement(MySQLConnector):
         return symbols
     
 
-    def get_symbol_list(self, min_year:int = 0):
+    def get_symbol_list_with_filter(self, min_year:int = 0):
         symbols = []
         base_query = f"""
             SELECT symbol
@@ -1619,7 +1619,7 @@ class DB_FinancialStatement(MySQLConnector):
             min_year = int(quarters[3].split('-Q')[0]) - 3 # 필터 된 날짜.
 
             # symbols = fs.getSymbolListByFilter(min_year) # 필터링된 날짜까지만 추출
-            symbols = fs.get_symbol_list(min_year)
+            symbols = fs.get_symbol_list_with_filter(min_year)
             print(f"{min_year} 이전 상장 티커 수 : {len(symbols)}")
 
             df_year = fs.get_data(symbols, EDateType.YEAR, min_year)
@@ -1692,7 +1692,7 @@ class DB_FinancialStatement(MySQLConnector):
 
         else:
             with DB_FinancialStatement() as fs:
-                symbols = fs.get_symbol_list()
+                symbols = fs.get_symbol_list_with_filter()
                 df = fs.get_fs_all(symbols, EDateType.QUARTER)
                 df = fs.get_value_data(df)
                 df = DB_FinancialStatement.add_quarter_column(df)
@@ -1734,7 +1734,7 @@ class DB_FinancialStatement(MySQLConnector):
         
         else:
             with DB_FinancialStatement() as fs:
-                symbols = fs.get_symbol_list(2021)
+                symbols = fs.get_symbol_list_with_filter(2021)
                 df_year = fs.get_fs_all(symbols, EDateType.YEAR)
                 df_year = DB_FinancialStatement.filter_remove_same_year(df_year)
 

@@ -13,7 +13,9 @@ import sys
 import math
 import requests
 import datetime
+import csv, datetime, os
 
+from tqdm import tqdm
 from db_financialStatement import DB_FinancialStatement
 from db_stock import DB_Stock
 from db_nyse import DB_NYSE
@@ -186,7 +188,7 @@ class DataDownloader:
         info = YFinanceInfo()
 
         if len(symbols) == 0:
-            symbols = db.getSymbolList()
+            symbols = db.get_symbol_list()
 
         check_file_name = f"fs_download_{date}_{datetime.datetime.now()}.csv"
 
@@ -369,7 +371,7 @@ class DataDownloader:
     # 시계열 가져와 DB에 저장
     #--------------------
     @staticmethod
-    def downloadStockDataAndSaveDB(start=None, end=None, symbols=[], batch_size=100, sleep_sec=5, startIndex=0, endIndex=None):
+    def downloadStockDataAndSaveDB(symbols:list=[], start=None, end=None, batch_size=100, sleep_sec=5, startIndex=0, endIndex=None):
         """
         주식 데이터를 일정 개수씩 나눠서 다운로드하고 저장하는 함수
 
@@ -386,7 +388,7 @@ class DataDownloader:
         if len(symbols) == 0:
             fs_db = DB_FinancialStatement()
             fs_db.connect()
-            symbols = fs_db.getSymbolList()
+            symbols = fs_db.get_symbol_list()
             fs_db.disconnect()
 
         # 심볼 구간 잘라내기
@@ -562,6 +564,37 @@ class DataDownloader:
 
         df_final = pd.DataFrame(all_data)
         return df_final
+    
+
+    # fetch_all_nyse_data를 통해 새로운 데이터를 가져와 과거에 없는 심볼들을 company 테이블에서 제거함.
+    @staticmethod
+    def update_nyse_and_company_table():
+        csv_file_name = 'nyse_listings_partial'
+        
+        # 1. 새로운거 다운
+        nyse_new = pd.read_csv(f'{csv_file_name}_new.csv')
+        
+        # 2. 과거 데이터 조회
+        nyse_prev = pd.read_csv(f'{csv_file_name}.csv')
+
+        # 3. 상폐된 데이터 불러오기
+        new_symbols = nyse_new['normalizedTicker'].tolist()
+        prev_symbols = nyse_prev['normalizedTicker'].tolist()
+
+        removed_symbols = []
+        for s in prev_symbols:
+            if s not in new_symbols:
+                removed_symbols.append(s)
+
+        display(f"상폐 심볼 : {removed_symbols}")
+
+        with DB_FinancialStatement() as fs:
+            symbols_str = ",".join(f"'{s}'" for s in removed_symbols)
+            query = f"""
+                DELETE FROM Company
+                WHERE Symbol IN ({symbols_str});
+                """
+            fs.commitToDB(query)
 
 
     @staticmethod
@@ -707,34 +740,57 @@ class DataDownloader:
 
     @staticmethod
     def downloadCompanyInfoAndSaveDB(symbols=[]):
+        # 세션별 결과 로그 파일
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        log_filename = f"company_info_results_{ts}.csv"
+
+        def append_log(symbol, status, message=""):
+            """각 심볼 처리 결과를 즉시 CSV에 1행씩 기록"""
+            file_exists = os.path.exists(log_filename)
+            with open(log_filename, "a", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(f, fieldnames=["symbol", "status", "message", "timestamp"])
+                if not file_exists:
+                    writer.writeheader()
+                writer.writerow({
+                    "symbol": symbol,
+                    "status": status,            # "SUCCESS" | "NO_DATA" | "ERROR"
+                    "message": str(message)[:500],  # 메시지 너무 길어지지 않게 절단(선택)
+                    "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
+                })
 
         with DB_FinancialStatement() as fs:
 
             if len(symbols) == 0:
                 with DB_NYSE() as nyse:
                     symbols = nyse.getSymbolList()
-                
-            max_workers = min(5, len(symbols))  # 적절한 워커 수 결정 (너무 많은 스레드 방지)
+            
+            max_workers = min(5, len(symbols))
 
-            # 병렬 처리
             with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
                 futures = {executor.submit(DataDownloader.process_symbol, symbol): symbol for symbol in symbols}
 
                 for future in tqdm(concurrent.futures.as_completed(futures), total=len(futures), desc="Processing Companies"):
-                    symbol = futures[future]  # 항상 가져오기
+                    symbol = futures[future]
                     try:
                         result_symbol, info = future.result()
                         if info and info.stock is not None:
                             DataDownloader.save_company_info_to_db(info, fs.conn)
+                            append_log(symbol, "SUCCESS", "saved")
                         else:
-                            print(f"🚨 {result_symbol}: No stock data available.")
+                            msg = f"{result_symbol}: No stock data available."
+                            print(f"🚨 {msg}")
+                            append_log(symbol, "NO_DATA", msg)
                     except Exception as e:
-                        print(f"❌ Error processing {symbol}: {e}")
+                        err = f"{type(e).__name__}: {e}"
+                        print(f"❌ Error processing {symbol}: {err}")
+                        append_log(symbol, "ERROR", err)
+
+        print(f"📝 처리 결과 로그: {log_filename}")
 
     
 
     @staticmethod
-    def downloadCompanyInfoAndSaveDB_V2(symbols:list):
+    def downloadCompanyInfoAndSaveDB_Naive(symbols:list):
         with DB_FinancialStatement() as fs:
             for symbol in symbols:
                 try:
