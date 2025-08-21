@@ -190,9 +190,9 @@ class Portfolio:
         return df
     
     def f_score(start_date, end_date):
-        df_ncva_rank = DB_FinancialStatement.get_f_score_rank_table()
-        symbols = list(set(val for val in df_ncva_rank.values.ravel() if pd.notna(val)))
-        quarter_list = df_ncva_rank.columns.to_list()
+        df_rank = DB_FinancialStatement.get_f_score_rank_table()
+        symbols = list(set(val for val in df_rank.values.ravel() if pd.notna(val)))
+        quarter_list = df_rank.columns.to_list()
 
         date_dict = commonHelper.get_date_dict_by_quarter_lazy(quarter_list)
         date_dict = commonHelper.get_trimmed_date_dict(date_dict, start_date, end_date)
@@ -201,9 +201,33 @@ class Portfolio:
 
         df = AssetAllocation.get_stock_data_with_ma(symbols=symbols, start_date=oldest, end_date=latest, mas=[10], type='ma_month', use_db_stock=True)
         df = AssetAllocation.filter_close_last_month(df)
-        df = AssetAllocation.strategy_ncva(df, df_ncva_rank, date_dict)
+        df = AssetAllocation.strategy_ncva(df, df_rank, date_dict)
         
         return df
+    
+    def relative_momentum(start_date, end_date):
+        df_rank = DB_FinancialStatement.get_market_cap_rank_table()
+        symbols = list(set(val for val in df_rank.values.ravel() if pd.notna(val)))
+
+        quarter_list = df_rank.columns.to_list()
+
+        date_dict = commonHelper.get_date_dict_by_quarter_lazy(quarter_list)
+        date_dict = commonHelper.get_trimmed_date_dict(date_dict, start_date, end_date)
+        date_dict = commonHelper.adjust_start_data_dict_by_quarter(date_dict, quarter_list[0])
+        oldest, latest = commonHelper.get_date_range_from_quarters(date_dict)
+        dt_oldest = datetime.strptime(oldest, "%Y-%m-%d")
+        dt_oldest = dt_oldest - relativedelta(years=1)
+        oldest = dt_oldest.strftime("%Y-%m-%d")
+
+        display(oldest, latest)
+
+        symbols_dfs = AssetAllocation.get_stock_data_with_ma(symbols, oldest, latest, [10], 'ma_month', True)
+        symbols_dfs = AssetAllocation.filter_close_last_month(symbols_dfs)
+        df = AssetAllocation.strategy_relative_momentum(symbols_dfs, df_rank)
+
+        return df
+        
+
 
 
     def show_portfolio_eft():
@@ -237,7 +261,8 @@ class Portfolio:
             {'NVAC': Portfolio.nvca(start_date, end_date)},
             {'Super Value':Portfolio.super_value(start_date,end_date)},
             {'New Magic':Portfolio.new_magic(start_date,end_date)},
-            {'F Score' : Portfolio.f_score(start_date, end_date)}
+            {'F Score' : Portfolio.f_score(start_date, end_date)},
+            {'Relative Momentum' : Portfolio.relative_momentum(start_date, end_date)}
         ]
 
         Portfolio.plot_multiple_balances_over_time([list(d.values())[0] for d in allocations],

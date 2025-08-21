@@ -1,3 +1,4 @@
+from operator import imod
 import pandas as pd
 import yfinance as yf
 import numpy as np
@@ -100,7 +101,7 @@ class AssetAllocation:
         result_dfs = {}
 
         if use_db_stock:
-            symbol_dfs = DB_Stock.get_stock_data(symbols=symbols, start_date=start_date,end_date=end_date)
+            symbol_dfs = DB_Stock.get_stock_data(symbols=symbols, start_date=start_date, end_date=end_date)
         else:
             symbol_dfs = AssetAllocation.get_stock_data(symbols=symbols, start_date=start_date,end_date=end_date)
         
@@ -158,7 +159,6 @@ class AssetAllocation:
         elif type == 'ma_month':
             prev_day = sort_mas[-1]*25
             prev_date = start_date -relativedelta(days=prev_day*1.5)
-            print(prev_date)
 
         # 월말 데이터 가져오기
         symbol_dfs = AssetAllocation.get_stock_data_close(symbols=symbols, start_date=prev_date, end_date=end_date, include_diviend=True, key= 'Close', use_db_stock=use_db_stock)
@@ -1082,6 +1082,11 @@ class AssetAllocation:
                     symbols = df_ncva_rank[quarter].dropna().tolist()
                     df.at[i, 'Restart Asset'] = symbols
                     break
+            
+            if len(symbols) == 0:
+                print(f"symbols is 0. date : {date}")
+                raise Exception("에러가 발생했습니다!")
+            
 
             symbols_len = len(symbols)
 
@@ -1111,7 +1116,10 @@ class AssetAllocation:
                         if before_restart_result_close[j] != 0 else 0
                         for j in range(len(before_restart_result_close))
                     ]
+
                     end_balances = [round(df.at[i-1, 'Restart Balance'][j] * change_factors[j], 2) for j in range(len(change_factors))]
+                    # Nan 처리 >> Nan을 sum하면 Nan이 됨
+                    # total_balance = [0 if np.isnan(x) else x for x in end_balances]
                     df.at[i, 'End Balance'] = end_balances
 
                     total_balance = sum(end_balances)
@@ -1119,7 +1127,7 @@ class AssetAllocation:
 
                     curr_restart_assets = df.at[i, 'Restart Asset']
 
-                    if set(before_restart_assets) == set(curr_restart_assets):
+                    if before_restart_assets == curr_restart_assets:
                         df.at[i, 'Restart Balance'] = end_balances
                     else:
                         df.at[i, 'Restart Balance'] = [total_balance//symbols_len] * symbols_len
@@ -1127,3 +1135,125 @@ class AssetAllocation:
                 print(e)
 
         return df
+    
+
+    # 대형주 상대 모멘텀 전략
+    # df_rank에 분기별 시총이 가장 높은 순으로 top N개 추출
+    # 그 분기 중에서도 12개월 주가 수익율이 가장 높은 순으로 정렬
+    # 상위 N개 추출(20개)
+    # 분기별 리벨런싱 처리 ()
+    def strategy_relative_momentum(symbols_dfs:dict, df_rank:pd.DataFrame):
+        import commonHelper
+        for symbol, df in symbols_dfs.items():
+            df['Result Close Before 12M'] = df['Result Close'].shift(12)
+            df['Return Ratio 12M'] = (df['Result Close']/df['Result Close Before 12M']) - 1
+            df = df.dropna(subset=['Return Ratio 12M'])
+            symbols_dfs[symbol] = df
+
+        df = AssetAllocation.merge_to_dfs(symbols_dfs)
+
+        columns = [col for col in df.columns if col not in ['Adj Close','Close','Dividends','Condition', 'Result Close Before 12M']]
+        df = df[columns]
+
+
+        def get_quarter(row):
+            date = row['Date']
+            quarter = commonHelper.get_quarter_by_date(date)
+            return quarter
+
+        def get_selected_assets(row, top_n=20):
+            symbols = row['Symbol']
+            ratios = row['Return Ratio 12M']
+            quarter = row['Quarter']
+
+            ratios_dict = {}
+            for idx in range(len(symbols)):
+                ratios_dict[symbols[idx]] = ratios[idx]
+            
+            # 범위가 없을때는 가장 앞의걸로 (근데, 이거 수정할수도 있음 나중에)
+            if quarter not in df_rank.columns:
+                quarter = df_rank.columns[0]
+                df.at[row.name, 'Quarter'] = quarter
+
+            rank_symbols = df_rank[quarter].tolist()
+
+            sorted_symbols = sorted(
+                rank_symbols,
+                key=lambda sym: ratios_dict.get(sym, float('-inf')),
+                reverse=True
+            )
+
+            sorted_symbols = sorted_symbols[:top_n]
+            sorted_symbols.sort()
+            return sorted_symbols
+        
+        def get_restart_return_ratio_12M(row):
+            restart_asset = row['Restart Asset']
+            symbol_list = row['Symbol']
+            ratio_12M_list = row['Return Ratio 12M']
+            symbol_to_ratio_12M = dict(zip(symbol_list, ratio_12M_list))
+            restart_ratio_12M_list = [
+                symbol_to_ratio_12M.get(symbol, 0) 
+                for symbol in restart_asset
+            ]
+            return restart_ratio_12M_list
+
+        df['End Balance'] = None
+        df['Balance'] = None
+        df['Quarter'] = df.apply(get_quarter, axis=1)
+        df['Restart Asset'] = df.apply(get_selected_assets, axis=1, top_n=10)
+        
+        # 분기별 리벨런싱을 위한 리스타트 에셋 재설정 (이거 없으면, 매월 리벨런싱이 된다)
+        for i in range(1, len(df)):
+            prev_quarter = df.at[i-1, 'Quarter']
+            quarter = df.at[i, 'Quarter']
+            if prev_quarter == quarter:
+                df.at[i,'Restart Asset'] = df.at[i-1, 'Restart Asset']
+        
+        df['Restart Return Ratio 12M'] = df.apply(get_restart_return_ratio_12M, axis=1)
+        df['Restart Balance'] = None
+        df['Do Rebalance'] = False
+        df = df.drop(columns='Return Ratio 12M')
+
+        def get_restart_result_close(prev_symbol: list, prev_close:list , prev_restart_asset:list) -> list:
+            symbol_to_close = dict(zip(prev_symbol, prev_close))
+            restart_result_close = [symbol_to_close.get(sym, 0) for sym in prev_restart_asset]
+            return restart_result_close
+
+        for i in range(len(df)):
+            restart_asset = df.at[i, 'Restart Asset']
+            restart_len = len(restart_asset)
+            if i == 0:
+                init_balance = 10000
+                df.at[i, 'Balance'] = init_balance
+                df.at[i, 'Restart Balance'] = [init_balance//(len(restart_asset)) for x in range(restart_len)]
+            
+            else:
+                prev_restart_assets = df.at[i-1, 'Restart Asset']
+                prev_restart_result_close = get_restart_result_close(df.at[i-1, 'Symbol'], df.at[i-1, 'Result Close'], prev_restart_assets)
+                curr_restart_result_close = get_restart_result_close(df.at[i, 'Symbol'], df.at[i, 'Result Close'], prev_restart_assets)
+                
+                change_factors = [
+                    curr_restart_result_close[j] / prev_restart_result_close[j]
+                    if prev_restart_result_close[j] != 0 else 0
+                    for j in range(len(prev_restart_result_close))
+                ]
+
+                end_balances = [round(df.at[i-1, 'Restart Balance'][j] * change_factors[j], 2) for j in range(len(change_factors))]
+                df.at[i, 'End Balance'] = end_balances
+
+                total_balance = sum(end_balances)
+                df.at[i, 'Balance'] = total_balance
+
+                curr_restart_assets = df.at[i, 'Restart Asset']
+
+                if prev_restart_assets == curr_restart_assets:
+                    df.at[i, 'Restart Balance'] = end_balances
+                else:
+                    df.at[i, 'Restart Balance'] = [total_balance//restart_len] * restart_len
+                    df.at[i, 'Do Rebalance'] = True
+                
+
+        return df
+
+

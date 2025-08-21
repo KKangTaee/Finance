@@ -2,6 +2,7 @@ from functools import reduce
 from heapq import merge
 from symtable import Symbol
 from assetAllocation import AssetAllocation
+import commonHelper
 from db_stock import DB_Stock
 from mysqlConnecter import MySQLConnector
 from commonHelper import EFinancialStatementType, EDateType, EIndustry
@@ -1929,12 +1930,14 @@ class DB_FinancialStatement(MySQLConnector):
                 df_quarter = fs.get_value_data(df_quarter)
                 df_quarter = DB_FinancialStatement.add_quarter_column(df_quarter)
                 df_quarter['1/PER'] = 1/df_quarter['PER']
-                df_quarter = df_quarter[df_quarter['Date']== '2023-12-31']    
+                # df_quarter = df_quarter[df_quarter['Date']== '2023-12-31']    
 
-            
+
                 dict_df = {}
                 grouped = df_quarter.groupby('Quarter')
                 for idx, group in grouped:
+                    display(idx)
+
                     check_symbols = df_rank[idx].dropna().tolist()
                     df_filter = group[group['Symbol'].isin(check_symbols)]
                     df_filter = df_filter.sort_values(by='1/PER', ascending=False)
@@ -1946,4 +1949,39 @@ class DB_FinancialStatement(MySQLConnector):
                 df = df.head(20)
                 df.to_csv(csv_file_name, index=False)
             
+            return df
+        
+
+    def get_market_cap_rank_table(loaded = True):
+        
+        csv_file_name = 'market_cap_rank.csv'
+        if loaded:
+            df = pd.read_csv(csv_file_name)
+            return df
+        
+        else:
+            with DB_FinancialStatement() as fs:
+                symbols = fs.get_symbol_list_with_filter(2021)
+                df = fs.get_fs_all(symbols, commonHelper.EDateType.QUARTER)
+                df = fs.get_value_data(df)
+                df = DB_FinancialStatement.add_quarter_column(df)
+
+                grouped = df.groupby('Quarter')
+                
+                grouped_dict = {}
+                max_len = 0
+                for index, group in grouped:
+                    group = group.reset_index(drop=True)
+                    group = group.sort_values(by='MarketCap',ascending=True)
+                    group_list = group['Symbol'].tolist()
+                    grouped_dict[index] = group_list
+                    max_len = max(max_len, len(group_list))
+
+                for key, value in grouped_dict.items():
+                    value.extend([np.nan]*(max_len - len(value)))
+
+                df = pd.DataFrame(grouped_dict)
+                df = df.head(500)
+                df.to_csv(csv_file_name, index= False)
+
             return df

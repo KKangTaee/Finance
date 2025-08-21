@@ -363,40 +363,60 @@ def get_data_dict_by_quarter_normal(quarter_list : list):
     return date_dict
 
 
-def get_date_dict_by_quarter_lazy(quarter_list : list):
+
+def get_date_dict_by_quarter_lazy(quarter_list: list):
+    import calendar
+    
     # 분기별 시작일과 종료일 매핑
+    # quarter_date_map = {
+    #     "Q1": ("06-01", "08-31"),
+    #     "Q2": ("09-01", "11-30"),
+    #     "Q3": ("12-01", "03-31"),
+    #     "Q4": ("04-01", "05-31")
+    # }
+
     quarter_date_map = {
-        "Q1": ("06-01", "08-31"),
-        "Q2": ("09-01", "11-30"),
-        "Q3": ("12-01", "03-31"),
-        "Q4": ("04-01", "05-31")
+        "Q1": ("05-01", "07-31"),
+        "Q2": ("08-01", "10-31"),
+        "Q3": ("11-01", "02-29"),  # <-- 문제점: 윤달 처리 필요
+        "Q4": ("03-01", "04-30")
     }
 
     date_dict = {}
     for q in quarter_list:
         year, quarter = q.split("-")  # 예: "2024-Q1" → year = "2024", quarter = "Q1"
+        year_int = int(year)
+
         if quarter in quarter_date_map:
             start_suffix, end_suffix = quarter_date_map[quarter]
-            
-            year_int = int(year)
+
             if quarter == 'Q3':
                 start_year = year_int
                 end_year = year_int + 1
             elif quarter == 'Q4':
-                start_year = year_int + 1 
-                end_year = year_int +1
+                start_year = year_int + 1
+                end_year = year_int + 1
             else:
                 start_year = year_int
                 end_year = year_int
 
             start_date = f"{start_year}-{start_suffix}"
+
+            # ✅ 윤년 체크 (02-29 → 02-28 보정)
+            if end_suffix == "02-29":
+                if calendar.isleap(end_year):
+                    end_suffix = "02-29"
+                else:
+                    end_suffix = "02-28"
+
             end_date = f"{end_year}-{end_suffix}"
+
             date_dict[q] = [start_date, end_date]
         else:
-            # 예외 처리: 잘못된 quarter 값
             date_dict[q] = [None, None]
 
     return date_dict
+
 
 
 def get_date_dict_by_quarter_except_Q4(quarter_list: list):
@@ -449,6 +469,48 @@ def get_date_range_from_quarters(date_dict: dict):
     latest = max(end_dates).strftime("%Y-%m-%d")
 
     return oldest, latest
+
+#---------------
+# date 값을 넣으면, 몇년도 몇분기인지 반환하는 코드
+#---------------
+def get_quarter_by_date(date_input) -> str:
+    """
+    date_input: 'YYYY-MM-DD' 문자열 또는 datetime 객체
+    반환: 'YYYY-Qx' 형식의 문자열
+    (분기 구분은 quarter_date_map 기준, Q3/Q4跨연도 고려)
+    """
+    # 분기별 날짜 매핑 (시작월-시작일, 종료월-종료일)
+    quarter_date_map = {
+        "Q1": ("06-01", "08-31"),   # 같은 해 6~8월
+        "Q2": ("09-01", "11-30"),   # 같은 해 9~11월
+        "Q3": ("12-01", "03-31"),   #跨연도: 12월 ~ 다음 해 3월
+        "Q4": ("04-01", "05-31")    #跨연도: 다음 해 4~5월
+    }
+    
+    # 문자열 → datetime 변환
+    if isinstance(date_input, str):
+        dt = datetime.strptime(date_input, "%Y-%m-%d")
+    elif isinstance(date_input, datetime):
+        dt = date_input
+    else:
+        raise TypeError("date_input은 str 또는 datetime이어야 합니다.")
+    
+    year = dt.year
+    month = dt.month
+    
+    # --- 분기 판별 ---
+    if month in [5, 6, 7]:          # Q1
+        return f"{year}-Q1"
+    elif month in [8, 9, 10]:       # Q2
+        return f"{year}-Q2"
+    elif month in [11, 12]:         # Q3 (같은 해 12월)
+        return f"{year}-Q3"
+    elif month in [1, 2]:           # Q3 (다음 해 1~3월 → 이전 해 Q3)
+        return f"{year-1}-Q3"
+    elif month in [3, 4]:           # Q4 (다음 해 4~5월 → 이전 해 Q4)
+        return f"{year-1}-Q4"
+    
+    raise ValueError(f"어떤 분기에도 속하지 않습니다: {date_input}")
 
 
 #------------------
