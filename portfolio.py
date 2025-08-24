@@ -8,6 +8,7 @@ from dateutil.relativedelta import relativedelta
 from assetAllocation import AssetAllocation
 from IPython.display import display
 
+import assetAllocation
 import commonHelper
 from db_financialStatement import DB_FinancialStatement
 
@@ -64,6 +65,8 @@ class Portfolio:
         plt.legend()
         plt.tight_layout()
         plt.show()
+
+    
 
     # 해리브라운의 영구포트폴리오
     def harry_browne_permanent_portfolio(start_date, end_date):
@@ -139,6 +142,12 @@ class Portfolio:
         return df
     
 
+    # NCVA 전략
+    # 아래의 조건에 맞는 종목 찾기
+    #   1. 유동자산 - 총부채 > 시가총액
+    #   2. 분기 수익률 > 0
+    # * 1,2번 조건에 맞는 주식들 중에서 (유동자산 - 총부채) / 시가총액 비중이 가장 높은 주식 매수하기
+    # * df_ncva 에 랭크 데이터가 들어옴.
     def nvca(start_date, end_date):
         df_ncva_rank = DB_FinancialStatement.get_ncva_rank_table()
         symbols = list(set(val for val in df_ncva_rank.values.ravel() if pd.notna(val)))
@@ -151,7 +160,7 @@ class Portfolio:
 
         df = AssetAllocation.get_stock_data_with_ma(symbols=symbols, start_date=oldest, end_date=latest, mas=[10], type='ma_month', use_db_stock=True)
         df = AssetAllocation.filter_close_last_month(df)
-        df = AssetAllocation.strategy_ncva(df, df_ncva_rank, date_dict)
+        df = AssetAllocation.strategy_quarter_rank(df, df_ncva_rank, date_dict)
 
         return df
     
@@ -168,7 +177,7 @@ class Portfolio:
 
         df = AssetAllocation.get_stock_data_with_ma(symbols=symbols, start_date=oldest, end_date=latest, mas=[10], type='ma_month', use_db_stock=True)
         df = AssetAllocation.filter_close_last_month(df)
-        df = AssetAllocation.strategy_ncva(df, df_ncva_rank, date_dict)
+        df = AssetAllocation.strategy_quarter_rank(df, df_ncva_rank, date_dict)
         
         return df
     
@@ -185,7 +194,7 @@ class Portfolio:
 
         df = AssetAllocation.get_stock_data_with_ma(symbols=symbols, start_date=oldest, end_date=latest, mas=[10], type='ma_month', use_db_stock=True)
         df = AssetAllocation.filter_close_last_month(df)
-        df = AssetAllocation.strategy_ncva(df, df_ncva_rank, date_dict)
+        df = AssetAllocation.strategy_quarter_rank(df, df_ncva_rank, date_dict)
         
         return df
     
@@ -201,7 +210,7 @@ class Portfolio:
 
         df = AssetAllocation.get_stock_data_with_ma(symbols=symbols, start_date=oldest, end_date=latest, mas=[10], type='ma_month', use_db_stock=True)
         df = AssetAllocation.filter_close_last_month(df)
-        df = AssetAllocation.strategy_ncva(df, df_rank, date_dict)
+        df = AssetAllocation.strategy_quarter_rank(df, df_rank, date_dict)
         
         return df
     
@@ -219,20 +228,77 @@ class Portfolio:
         dt_oldest = dt_oldest - relativedelta(years=1)
         oldest = dt_oldest.strftime("%Y-%m-%d")
 
-        display(oldest, latest)
-
         symbols_dfs = AssetAllocation.get_stock_data_with_ma(symbols, oldest, latest, [10], 'ma_month', True)
         symbols_dfs = AssetAllocation.filter_close_last_month(symbols_dfs)
         df = AssetAllocation.strategy_relative_momentum(symbols_dfs, df_rank)
 
         return df
-        
+    
+    def magic_multify(start_date, end_date):
+        df_rank = DB_FinancialStatement.get_ev_ebit_rank_table()
+        symbols = list(set(val for val in df_rank.values.ravel() if pd.notna(val)))
+        quarter_list = df_rank.columns.to_list()
 
+        date_dict = commonHelper.get_date_dict_by_quarter_lazy(quarter_list)
+        date_dict = commonHelper.get_trimmed_date_dict(date_dict, start_date, end_date)
+        date_dict = commonHelper.adjust_start_data_dict_by_quarter(date_dict, quarter_list[0])
+        oldest, latest = commonHelper.get_date_range_from_quarters(date_dict)
+
+        df = AssetAllocation.get_stock_data_with_ma(symbols=symbols, start_date=oldest, end_date=latest, mas=[10], type='ma_month', use_db_stock=True)
+        df = AssetAllocation.filter_close_last_month(df)
+        df = AssetAllocation.strategy_quarter_rank(df, df_rank, date_dict)
+        
+        return df
+    
+
+    def low_per(start_date, end_date):
+        df_rank = DB_FinancialStatement.get_low_per_rank_table()
+        symbols = list(set(val for val in df_rank.values.ravel() if pd.notna(val)))
+        quarter_list = df_rank.columns.to_list()
+
+        date_dict = commonHelper.get_date_dict_by_quarter_lazy(quarter_list)
+        date_dict = commonHelper.get_trimmed_date_dict(date_dict, start_date, end_date)
+        date_dict = commonHelper.adjust_start_data_dict_by_quarter(date_dict, quarter_list[0])
+        oldest, latest = commonHelper.get_date_range_from_quarters(date_dict)
+
+        df = AssetAllocation.get_stock_data_with_ma(symbols=symbols, start_date=oldest, end_date=latest, mas=[10], type='ma_month', use_db_stock=True)
+        df = AssetAllocation.filter_close_last_month(df)
+        df = AssetAllocation.strategy_quarter_rank(df, df_rank, date_dict)
+        
+        return df
+    
+
+    def fama_high_return(start_date, end_date):
+        df_rank = DB_FinancialStatement.get_fama_high_return_rank_table()
+        df_rank = df_rank.head(20)
+        symbols = list(set(val for val in df_rank.values.ravel() if pd.notna(val)))
+        quarter_list = df_rank.columns.to_list()
+
+        date_dict = commonHelper.get_date_dict_by_quarter_lazy(quarter_list)
+        date_dict = commonHelper.get_trimmed_date_dict(date_dict, start_date, end_date)
+        date_dict = commonHelper.adjust_start_data_dict_by_quarter(date_dict, quarter_list[0])
+        oldest, latest = commonHelper.get_date_range_from_quarters(date_dict)
+
+        df = AssetAllocation.get_stock_data_with_ma(symbols=symbols, start_date=oldest, end_date=latest, mas=[10], type='ma_month', use_db_stock=True)
+        df = AssetAllocation.filter_close_last_month(df)
+        df = AssetAllocation.strategy_quarter_rank(df, df_rank, date_dict)
+
+        return df
+
+    def income_mementum(start_date, end_date):
+        df_rank = DB_FinancialStatement.get_income_momentum_rank_table()
+        df = AssetAllocation.calculation_quarter_rank(start_date, end_date, df_rank, 20)
+        return df
+    
+    def upgrade_nvca(start_date, end_date):
+        df_rank = DB_FinancialStatement.get_upgrade_nvca_rank_table()
+        df = AssetAllocation.calculation_quarter_rank(start_date, end_date, df_rank, 20)
+        return df
 
 
     def show_portfolio_eft():
         start_date = '2013-12-01'
-        end_date = '2025-08-07'
+        end_date = '2025-08-19'
         allocations = [
             {'Harry Brown': Portfolio.harry_browne_permanent_portfolio(start_date, end_date)},
             {'Ray Dailo' : Portfolio.ray_dalio_all_seasons(start_date, end_date)},
@@ -256,13 +322,17 @@ class Portfolio:
 
     def show_portfolio_stock():
         start_date = '2013-12-01'
-        end_date = '2025-08-04'
+        end_date = '2025-08-19'
         allocations = [
-            {'NVAC': Portfolio.nvca(start_date, end_date)},
+            # {'NVAC': Portfolio.nvca(start_date, end_date)},
             {'Super Value':Portfolio.super_value(start_date,end_date)},
             {'New Magic':Portfolio.new_magic(start_date,end_date)},
-            {'F Score' : Portfolio.f_score(start_date, end_date)},
-            {'Relative Momentum' : Portfolio.relative_momentum(start_date, end_date)}
+            # {'F Score' : Portfolio.f_score(start_date, end_date)},
+            # {'Relative Momentum' : Portfolio.relative_momentum(start_date, end_date)},
+            # {'Magic Multify' : Portfolio.magic_multify(start_date,end_date)},
+            # {'Low PER' : Portfolio.low_per(start_date, end_date)},
+            {'Fama High Return' : Portfolio.fama_high_return(start_date, end_date)},
+            {'Income Momentum' : Portfolio.income_mementum(start_date, end_date)}
         ]
 
         Portfolio.plot_multiple_balances_over_time([list(d.values())[0] for d in allocations],

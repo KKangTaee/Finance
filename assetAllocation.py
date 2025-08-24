@@ -1060,7 +1060,7 @@ class AssetAllocation:
     #   2. 분기 수익률 > 0
     # * 1,2번 조건에 맞는 주식들 중에서 (유동자산 - 총부채) / 시가총액 비중이 가장 높은 주식 매수하기
     # * df_ncva 에 랭크 데이터가 들어옴.
-    def strategy_ncva(symbols_dfs:dict, df_ncva_rank:pd.DataFrame, date_dict:dict, init_balance = 10000):
+    def strategy_quarter_rank(symbols_dfs:dict, df_ncva_rank:pd.DataFrame, date_dict:dict, init_balance = 10000):
 
         df = AssetAllocation.merge_to_dfs(symbols_dfs)
 
@@ -1084,10 +1084,9 @@ class AssetAllocation:
                     break
             
             if len(symbols) == 0:
-                print(f"symbols is 0. date : {date}")
+                print(f"symbols is 0. date : {date}, {date_dict}")
                 raise Exception("에러가 발생했습니다!")
             
-
             symbols_len = len(symbols)
 
             try:
@@ -1257,3 +1256,24 @@ class AssetAllocation:
         return df
 
 
+    # 분기 랭크 연산
+    # - 계산된 분기 랭크 테이블를 넣으면 분기 리벨련신으로 계산해서 결과값 줌
+    # - df_rank 는 column이 '2024-Q1', '2024-Q2' 이런식으로 정의되어야 함.
+    @staticmethod
+    def calculation_quarter_rank(start_date, end_date, df_rank:pd.DataFrame, top_n:int=0):
+        import commonHelper
+        if top_n > 0:
+            df_rank =df_rank.head(top_n)
+
+        symbols = list(set(val for val in df_rank.values.ravel() if pd.notna(val)))
+        quarter_list = df_rank.columns.to_list()
+
+        date_dict = commonHelper.get_date_dict_by_quarter_lazy(quarter_list)
+        date_dict = commonHelper.get_trimmed_date_dict(date_dict, start_date, end_date)
+        date_dict = commonHelper.adjust_start_data_dict_by_quarter(date_dict, quarter_list[0])
+        oldest, latest = commonHelper.get_date_range_from_quarters(date_dict)
+
+        df = AssetAllocation.get_stock_data_with_ma(symbols=symbols, start_date=oldest, end_date=latest, mas=[10], type='ma_month', use_db_stock=True)
+        df = AssetAllocation.filter_close_last_month(df)
+        df = AssetAllocation.strategy_quarter_rank(df, df_rank, date_dict)
+        return df

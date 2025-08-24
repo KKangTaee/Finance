@@ -628,33 +628,49 @@ class DB_FinancialStatement(MySQLConnector):
         return df
     
 
-    # 
-    def get_income_growth(self, df:pd.DataFrame) -> pd.DataFrame:
+    # 영업이익 성장률
+    def get_operating_income_growth(self, df:pd.DataFrame) -> pd.DataFrame:
         
-        if 'OperatingIncome' not in df.columns:
+        required_columns = ['Symbol', 'Date', 'OperatingIncome']
+        if not all(col in df.columns for col in required_columns):
+            return None
+              
+        df = df.copy()
+        df = df.sort_values(by=['Symbol','Date'], ascending=True)
+        df['OperatingIncomeGrowth'] = None
+
+        for idx in range(1, len(df)):
+            if df.at[idx, 'Symbol'] == df.at[idx - 1, 'Symbol']:
+                current_rev = df.at[idx, 'OperatingIncome']
+                prev_rev = df.at[idx - 1, 'OperatingIncome']
+
+                if current_rev is not None and prev_rev and prev_rev != 0:
+                    df.at[idx, 'OperatingIncomeGrowth'] = (current_rev - prev_rev) / prev_rev
+
+        return df
+    
+    def get_net_income_growth(self, df:pd.DataFrame) ->pd.DataFrame:
+
+        required_columns = ['Symbol', 'Date', 'NetIncome']
+        if not all(col in df.columns for col in required_columns):
             return None
         
         df = df.copy()
-        df = df.sort_values(by=['Symbol','Date'], ascending=True)
-        df['IncomeGrowth'] = None
+        df['NetIcomeGrowth'] = None
 
+        df = df.sort_values(by=['Symbol','Date']).reset_index(drop=True)
 
-        for idx in range(len(df)):
-            
-            if idx == 0:
-                continue
+        for idx in range(1, len(df)):
+            if df.at[idx, 'Symbol'] == df.at[idx - 1, 'Symbol']:
+                current_rev = df.at[idx, 'NetIncome']
+                prev_rev = df.at[idx - 1, 'NetIncome']
 
-            prev_income = df.at[idx-1, 'OperatingIncome']
-            curr_income = df.at[idx, 'OperatingIncome']
-
-            if prev_income == 0:
-                print(f"[get_income_growth]{df.at[idx, 'Symbol']} prev_income is 0")
-                df.at[idx, 'IncomeGrowth'] = np.nan
-            else:
-                ratio = ((curr_income - prev_income)/prev_income).round(2)
-                df.at[idx, 'IncomeGrowth'] = ratio
+                if current_rev is not None and prev_rev and prev_rev != 0:
+                    df.at[idx, 'NetIcomeGrowth'] = (current_rev - prev_rev) / prev_rev
 
         return df
+        
+        
     
     def get_gross_profit_margin(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -815,6 +831,13 @@ class DB_FinancialStatement(MySQLConnector):
     
 
     def get_asset_turnover_ratio(self, df:pd.DataFrame) -> pd.DataFrame:
+        """
+        총자산회전률
+        정의 : 기업이 보유한 자산을 얼마나 효율적으로 활용하여 매출을 창출했는지 보여주는 지표
+        값이 높다? : 자산을 효율적으로 사용해 매출을 잘 만들고 있다는 뜻
+        값이 낮다? : 자산이 비효율적으로 묶여있거나 매출 창출 능력이 떨어진다는 뜻
+        보통 유통업이 일반적으로 높고 (재고 회전 빠름), 제조업이 낮다.(실비투자 많음)
+        """
 
         required_columns = ['TotalAssets', 'TotalRevenue']
         if not all(col in df.columns for col in required_columns):
@@ -831,6 +854,7 @@ class DB_FinancialStatement(MySQLConnector):
                 df.at[idx, 'AssetTurnoverRatio'] =  total_revenue / total_assets
 
         return df
+    
 
 
     # 이자보상배율 : 기업이 영업이익으로 이자비용을 얼마나 잘 갚을 수 있는지 나타내는 지표
@@ -853,6 +877,31 @@ class DB_FinancialStatement(MySQLConnector):
                 df.at[idx, 'InterestCoverageRatio'] = operating_income / interest_expense
 
         return df
+    
+    # 자산 성장률
+    def get_total_assets_growth(self, df:pd.DataFrame) -> pd.DataFrame:
+        ##
+        required_columns = ['Symbol', 'Date', 'TotalAssets']
+        if not all(col in df.columns for col in required_columns):
+            return None
+        
+        df = df.copy()
+        df['TotalAssetsGrowth'] = None
+
+        df = df.sort_values(by=['Symbol','Date']).reset_index(drop=True)
+
+        for idx in range(1, len(df)):
+            if df.at[idx, 'Symbol'] == df.at[idx - 1, 'Symbol']:
+                current_rev = df.at[idx, 'TotalAssets']
+                prev_rev = df.at[idx - 1, 'TotalAssets']
+
+                if current_rev is not None and prev_rev and prev_rev != 0:
+                    df.at[idx, 'TotalAssetsGrowth'] = (current_rev - prev_rev) / prev_rev
+
+        return df
+
+
+
 
 
     # SPAC 판별 메서드
@@ -913,7 +962,7 @@ class DB_FinancialStatement(MySQLConnector):
         df = self.get_pcr(df)
         df = self.get_pfcr(df)
         df = self.get_gross_profit_margin(df)
-        df = self.get_income_growth(df)
+        df = self.get_operating_income_growth(df)
         df = self.get_roe(df) # 자기자본이익률
         df = self.get_operating_margin(df) # 영업이익률 : 매출대비 영업이익률
         df = self.get_free_cash_flow_margin(df) # 잉여현금흐름률 : 매출 대비 잉여현금흐름 비율
@@ -945,6 +994,7 @@ class DB_FinancialStatement(MySQLConnector):
         df = df[['Date', 'Symbol', 'Sector', 'MarketCap', 'Close', 'NetIncome', 'PER','PBR','PCR','PSR','PFCR', 'LiquidationValue', 'EV/EBIT']]
         return df
 
+
     #-------------------------
     # 퀄리티 데이터
     #-------------------------
@@ -955,7 +1005,18 @@ class DB_FinancialStatement(MySQLConnector):
         df = self.get_debt_to_equity_ratio(df)
         df = self.get_asset_turnover_ratio(df)
         df = self.get_gross_profit_margin(df)
-        df = df[['Date', 'Symbol', 'Sector', 'MarketCap', 'Close', 'NetIncome', 'OperatingCashFlow', 'CommonStockIssuance', 'NetCommonStockIssuance', 'GP/A', 'ROA', 'CurrentRatio', 'DebtToEquityRatio', 'AssetTurnoverRatio', 'GrossProfitMargin']]
+        df = self.get_total_assets_growth(df)
+        df = df[['Date', 'Symbol', 'Sector', 'MarketCap', 'Close', 'NetIncome', 'OperatingCashFlow', 'CommonStockIssuance', 'NetCommonStockIssuance', 'GP/A', 'ROA', 'CurrentRatio', 'DebtToEquityRatio', 'AssetTurnoverRatio', 'GrossProfitMargin', 'TotalAssetsGrowth']]
+        return df
+    
+
+    #-------------------------
+    # 모멘텀 데이터
+    #-------------------------
+    def get_momentun_data(self, df):
+        df = self.get_operating_income_growth(df)
+        df = self.get_net_income_growth(df)
+        df = df[['Date', 'Symbol', 'Sector', 'MarketCap', 'Close', 'NetIncome','OperatingIncomeGrowth','NetIcomeGrowth']]
         return df
     
 
@@ -963,7 +1024,7 @@ class DB_FinancialStatement(MySQLConnector):
         df_value = self.get_value_data(df)
         df_quality =self.get_quality_date(df)
 
-        df_merged = pd.merge(df_value, df_quality, on=['Date', 'Symbol', 'Sector', 'MarketCap', 'Close'])
+        df_merged = pd.merge(df_value, df_quality, on=['Date', 'Symbol', 'Sector', 'MarketCap', 'Close', 'NetIncome'])
         return df_merged
 
 
@@ -1376,6 +1437,28 @@ class DB_FinancialStatement(MySQLConnector):
         df = df[cols]
 
         return df
+    
+
+    def add_year_column(df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Date 컬럼을 기준으로 'Year' 컬럼을 추가하고,
+        이 컬럼을 'Date' 컬럼 바로 뒤에 위치시켜 반환합니다.
+        """
+        # Date 컬럼이 datetime 타입이 아니면 변환
+        if not pd.api.types.is_datetime64_any_dtype(df['Date']):
+            df['Date'] = pd.to_datetime(df['Date'])
+
+        # Year 컬럼 추가
+        df['Year'] = df['Date'].dt.year
+
+        # 컬럼 순서 변경: Date 뒤에 Year 오도록 재정렬
+        cols = df.columns.tolist()
+        date_idx = cols.index('Date')
+        cols.remove('Year')
+        cols.insert(date_idx + 1, 'Year')
+        df = df[cols]
+
+        return df
 
 
     def create_quarter_groups(df: pd.DataFrame, window_size: int = 4) -> list:
@@ -1693,7 +1776,7 @@ class DB_FinancialStatement(MySQLConnector):
 
         else:
             with DB_FinancialStatement() as fs:
-                symbols = fs.get_symbol_list_with_filter()
+                symbols = fs.get_symbol_list_with_filter(2022)
                 df = fs.get_fs_all(symbols, EDateType.QUARTER)
                 df = fs.get_value_data(df)
                 df = DB_FinancialStatement.add_quarter_column(df)
@@ -1873,6 +1956,98 @@ class DB_FinancialStatement(MySQLConnector):
                 df.to_csv(csv_file_name, index=False)
 
             return df
+        
+
+    def stuff_df_nan(some_dict:dict) -> dict:
+        
+        max_len = 0
+        for key, value in some_dict.items():
+            max_len = max(max_len, len(value))
+
+        for key, value in some_dict.items():
+            value.extend([np.nan]*(max_len - len(value)))
+
+        return some_dict
+        
+
+    # 필터랑 소팅을 통해 분기 데이터를 구함.
+    def get_rank_table_quarter(label, 
+                    preprocess_func=None, 
+                    filter_func=None, 
+                    rank_key=None, 
+                    top_n=20, 
+                    loaded=True, 
+                    csv_file_name=None,
+                    ascending=False):
+        """
+        범용 랭킹 테이블 생성 함수 (label 중심)
+        
+        Parameters
+        ----------
+        label : str
+            결과 테이블의 이름 (CSV 저장 파일명에도 사용)
+        preprocess_func : function, optional
+            DataFrame -> DataFrame 형태의 함수 (새 컬럼 추가/전처리)
+        filter_func : function, optional
+            DataFrame -> DataFrame 형태의 함수 (행 필터링)
+        rank_key : function, required
+            DataFrame -> Series 형태의 함수 (정렬에 쓸 값)
+        top_n : int, default 20
+            최종 랭킹 상위 N개
+        loaded : bool, default True
+            True면 CSV 파일 로드, False면 새로 생성
+        csv_file_name : str, optional
+            저장/로드할 CSV 파일 이름 (없으면 label 기반으로 자동 생성)
+        ascending : bool, default False
+            정렬 방향 (False=내림차순, True=오름차순)
+        """
+        
+        if csv_file_name is None:
+            csv_file_name = f"{label}_rank.csv"
+        
+        if loaded:
+            return pd.read_csv(csv_file_name)
+        
+        # DB에서 데이터 가져오기
+        with DB_FinancialStatement() as fs:
+            symbols = fs.get_symbol_list_with_filter(2022)
+            df = fs.get_fs_all(symbols, commonHelper.EDateType.QUARTER)
+            df = fs.get_fs_data(df)
+            df = DB_FinancialStatement.add_quarter_column(df)
+            
+            # 전처리 (새 컬럼 추가 등)
+            if preprocess_func:
+                df = preprocess_func(df)
+            
+            # 필터링
+            if filter_func:
+                df = filter_func(df)
+            
+            # 정렬용 컬럼
+            col_name = f"rank_{label}"
+            df[col_name] = rank_key(df) if rank_key else np.nan
+            
+            # 분기별 그룹화 & 랭킹
+            dict_rank = {}
+            grouped = df.groupby('Quarter')
+            max_len = 0
+            for q, group in grouped:
+                group = group.sort_values(by=col_name, ascending=ascending)
+                group = group[['Date','Quarter','Symbol',col_name]]
+                symbol_list = group['Symbol'].tolist()
+                dict_rank[q] = symbol_list
+                max_len = max(max_len, len(symbol_list))
+                display(group.head(10))
+            
+            # 길이 맞추기
+            for key, value in dict_rank.items():
+                dict_rank[key] += [np.nan] * (max_len - len(value))
+            
+            df_rank = pd.DataFrame(dict_rank)
+            df_rank = df_rank.head(top_n)
+            df_rank.to_csv(csv_file_name, index=False)
+            
+        return df_rank
     
 
             
@@ -1985,3 +2160,157 @@ class DB_FinancialStatement(MySQLConnector):
                 df.to_csv(csv_file_name, index= False)
 
             return df
+        
+
+    # EV_EBIT 전략
+    def get_ev_ebit_rank_table(loaded = True):
+        df_ev_ebit = DB_FinancialStatement.get_rank_table_quarter(
+            label="EV_EBIT",
+            preprocess_func=lambda df: df.assign(**{'1/(EV/EBIT)': 1/df['EV/EBIT'].replace(0, np.nan)}),
+            filter_func=lambda df: df[(df['EV/EBIT'] > 0) & (df['EV/EBIT'] < 50)],
+            rank_key=lambda df: df['1/(EV/EBIT)'],
+            ascending=False,
+            top_n=20,
+            loaded=loaded
+        )
+
+        return df_ev_ebit
+        
+    # 저 피비알 전략
+    def get_low_per_rank_table(loaded =True):
+        df_per = DB_FinancialStatement.get_rank_table_quarter(
+            label="PER",
+            preprocess_func=lambda df: df.assign(**{'1/PER': 1/df['PER'].replace(0, np.nan)}),
+            filter_func=lambda df: df[df['PER'] > 0],
+            rank_key=lambda df: df['1/PER'],
+            ascending=False,
+            top_n=20,
+            loaded=loaded
+        )
+        return df_per
+    
+
+    # 파마의 고수성 + 저투자 전략
+    def get_fama_high_return_rank_table(loaded = True):
+        csv_file_name = 'fama_high_return.csv'
+
+        if loaded:
+            result_df = pd.read_csv(csv_file_name)
+            result_df = result_df.drop(columns=['Unnamed: 0'], errors='ignore')
+            return result_df
+
+        else:
+            with DB_FinancialStatement() as fs:
+                symbols = fs.get_symbol_list_with_filter(2021)
+                df = fs.get_fs_all(symbols, commonHelper.EDateType.QUARTER)
+                df = fs.get_quality_date(df)
+                df = df.dropna(subset='TotalAssetsGrowth')
+                df = DB_FinancialStatement.add_quarter_column(df)
+                
+                grouped = df.groupby('Quarter')
+                dict_rank = {}
+                for q, group in grouped:
+                    group = group[group['TotalAssetsGrowth'] > -0.2]
+                    asset_growth = group.sort_values(by='TotalAssetsGrowth', ascending=True)['Symbol'].tolist()
+                    gp_a_rank = group.sort_values(by='GP/A', ascending=False)['Symbol'].tolist()
+
+                    rank_asset = {sym:i for i, sym in enumerate(asset_growth)}
+                    rank_gp_a = {sym:i for i, sym in enumerate(gp_a_rank)}
+
+                    common_symbol = set(rank_asset) & set(rank_gp_a)
+                    avg_rank = []
+
+                    for sym in common_symbol:
+                        r1 = rank_asset[sym]
+                        r2 = rank_gp_a[sym]
+                        avg = (r1 + r2) / 2
+                        avg_rank.append((sym, avg))
+
+                    avg_rank_sorted = sorted(avg_rank, key = lambda x:x[1])
+                    final_symbols = [sym for sym, _ in avg_rank_sorted]
+                    dict_rank[q] = final_symbols
+
+                dict_rank = DB_FinancialStatement.stuff_df_nan(dict_rank)
+                df = pd.DataFrame(dict_rank)
+                df.to_csv(csv_file_name)
+                return df
+            
+
+    
+    def get_income_momentum_rank_table(loaded = True):
+        csv_file_name = 'income_momentum_rank.csv'
+        if loaded:
+            result_df = pd.read_csv(csv_file_name)
+            result_df = result_df.drop(columns=['Unnamed: 0'], errors='ignore')
+            return result_df
+        else:
+            with DB_FinancialStatement() as fs:
+                symbols = fs.get_symbol_list_with_filter(2021)
+                df_year = fs.get_fs_all(symbols, commonHelper.EDateType.YEAR)
+                df_year = fs.get_momentun_data(df_year)
+                df_year = df_year.dropna(subset=['NetIcomeGrowth'])
+                df_year = DB_FinancialStatement.add_year_column(df_year)
+                df_quarter = fs.get_fs_all(symbols, commonHelper.EDateType.QUARTER)
+                df_quarter = fs.get_momentun_data(df_quarter)
+                df_quarter = df_quarter.dropna(subset=['NetIcomeGrowth'])
+                df_quarter = DB_FinancialStatement.add_quarter_column(df_quarter)
+                
+                grouped_year = df_year.groupby('Year')
+                grouped_quarter = df_quarter.groupby('Quarter')
+
+                rank_year_dict = {}
+                for y, group in grouped_year:
+                    y_op = group.sort_values(by='OperatingIncomeGrowth', ascending = False)['Symbol'].tolist()
+                    y_net = group.sort_values(by='NetIcomeGrowth', ascending =False)['Symbol'].tolist()
+
+                    if y not in rank_year_dict:
+                        rank_year_dict[y] = {}
+
+                    rank_year_dict[y]['OperatingIncomeGrowth'] = {sym:i for i, sym in enumerate(y_op)}
+                    rank_year_dict[y]['NetIcomeGrowth'] = {sym:i for i, sym in enumerate(y_net)}
+
+                dict_rank = {}
+                for q, group in grouped_quarter:
+                    q_op = group.sort_values(by='OperatingIncomeGrowth', ascending = False)['Symbol'].tolist()
+                    q_net = group.sort_values(by='NetIcomeGrowth', ascending =False)['Symbol'].tolist()
+
+                    rank_op = {sym:i for i, sym in enumerate(q_op)}
+                    rank_net ={sym:i for i, sym in enumerate(q_net)}
+
+                    year = int(q.split('-')[0]) - 1 # 현분기 데이터를 기준이니, 전년도 데이터를 찾아야 함.
+                    rank_op_y = rank_year_dict[year]['OperatingIncomeGrowth']
+                    rank_net_y = rank_year_dict[year]['NetIcomeGrowth']
+
+                    common_symbol = set(rank_op) & set(rank_net) & set(rank_op_y) & set(rank_net_y)
+                    avg_rank = []
+                    for sym in common_symbol:
+                        r1 = rank_op[sym]
+                        r2 = rank_net[sym]
+                        r3 = rank_op_y[sym]
+                        r4 = rank_net_y[sym]
+                        avg = (r1 + r2 + r3 + r4) / 4
+                        avg_rank.append((sym, avg))
+
+                    avg_rank_sorted = sorted(avg_rank, key = lambda x:x[1])
+                    final_symbols = [sym for sym, _ in avg_rank_sorted]
+                    dict_rank[q] = final_symbols
+
+                dict_rank = DB_FinancialStatement.stuff_df_nan(dict_rank)
+                df = pd.DataFrame(dict_rank)
+                df.to_csv(csv_file_name)
+                return df
+            
+
+    def get_upgrade_nvca_rank_table(loaded = True):
+        df = DB_FinancialStatement.get_rank_table_quarter(
+            label='upgrade_nvca',
+            filter_func=lambda df : df[(df['LiquidationValue'] > df['MarketCap']) & 
+                                    (df['NetIncome'] > 0) & 
+                                    (df['GP/A'] >= df['GP/A'].quantile(0.5)) & 
+                                    (df['DebtToEquityRatio'] <= 2) ],
+            rank_key = lambda df :  df['LiquidationValue'] / df['MarketCap'],
+            ascending = False,
+            top_n= 20,
+            loaded=loaded
+        )
+        return df
