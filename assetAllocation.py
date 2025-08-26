@@ -1067,71 +1067,90 @@ class AssetAllocation:
         columns = [col for col in df.columns if col not in ['Adj Close','Close','Dividends','Condition']]
         df = df[columns]
 
-        df['End Balance'] = None
-        df['Restart Asset'] = None
-        df['Restart Balance'] = None
-        df['Balance'] = None
+        # 도중에 상폐된 심볼에 대한 제거
+        symbol_counts = df['Symbol'].astype(str).value_counts()
+        main_pattern = symbol_counts.index[0]
+        df = df[df['Symbol'].astype(str) == main_pattern].reset_index()
+        df = df.drop(columns=["index"])
+
+        df['End Balance'] = None        # 지난 달 Restart Assets의 결과        
+        df['Restart Asset'] = None      # 현 월 마지막에 리벨런싱 처리할 대상
+        df['Restart Balance'] = None    # 리벨런싱의 자산 배분
+        df['Cash'] = 0                  # 현금 보유 상황
+        df['Balance'] = None            # 토탈 비용
+        df['Do Rebalance'] = False      # 현 월에 리벨런싱이 되었나
 
         for i in range(len(df)):
             # symbols = df.at[i,'Symbol']
             date = df.at[i,'Date']
-            symbols = []
+            curr_restart_assets = []
 
             for quarter, (start, end) in date_dict.items():
                 if start <= date <= end:
-                    symbols = df_ncva_rank[quarter].dropna().tolist()
-                    df.at[i, 'Restart Asset'] = symbols
+                    curr_restart_assets = df_ncva_rank[quarter].dropna().tolist()
+                    df.at[i, 'Restart Asset'] = curr_restart_assets
                     break
-            
-            if len(symbols) == 0:
-                print(f"symbols is 0. date : {date}, {date_dict}")
-                raise Exception("에러가 발생했습니다!")
-            
-            symbols_len = len(symbols)
+                    
+            curr_restart_assets_len = len(curr_restart_assets) # 이제 변경할 자산배분의 길이
 
-            try:
-                if i == 0:
-                    init_balance = 10000      
-                    start_balances = [round(init_balance//symbols_len) for _ in range(symbols_len)]
-                    end_balances = [0]*symbols_len
+            if i == 0:
+                if curr_restart_assets_len == 0:
+                    df.at[0, 'Cash'] = init_balance # 자산배분할게 없다면 현금으로 보유한다.
+                else:
+                    start_balances = [round(init_balance//curr_restart_assets_len) for _ in range(curr_restart_assets_len)]
+                    end_balances = [0]*curr_restart_assets_len
                     df.at[i, 'Restart Balance'] = start_balances
                     df.at[i, 'End Balance'] = end_balances
-                    df.at[i, 'Balance'] = init_balance
-                else:
-                    before_symbols = df.at[i-1, 'Symbol']
-                    before_closes = df.at[i-1, 'Result Close']
-                    before_restart_assets = df.at[i-1, 'Restart Asset']
-                    
-                    symbol_to_close = dict(zip(before_symbols, before_closes))
-                    before_restart_result_close = [symbol_to_close.get(sym, 0) for sym in before_restart_assets]
+                df.at[i, 'Balance'] = init_balance
 
-                    curr_symbols = df.at[i, 'Symbol']
-                    curr_closes = df.at[i, 'Result Close']
-                    symbol_to_close = dict(zip(curr_symbols, curr_closes))
-                    curr_restart_result_close = [symbol_to_close.get(sym, 0) for sym in before_restart_assets]
+            else:
+                prev_restart_assets = df.at[i-1, 'Restart Asset']
+                
+                # LocalFunc
+                def get_result_close(symbols, closes, restart_assets):
+                    symbol_to_close = dict(zip(symbols, closes))
+                    restart_result_close = [symbol_to_close.get(sym, 0) for sym in restart_assets] # 이전달 종가 데이터
+                    return restart_result_close
+
+                if prev_restart_assets is not None and len(prev_restart_assets) > 0:
                     
+                    prev_result_close = get_result_close(df.at[i-1, 'Symbol'], df.at[i-1,'Result Close'], prev_restart_assets)
+                    curr_result_close = get_result_close(df.at[i, 'Symbol'], df.at[i,'Result Close'], prev_restart_assets)
+
                     change_factors = [
-                        curr_restart_result_close[j] / before_restart_result_close[j]
-                        if before_restart_result_close[j] != 0 else 0
-                        for j in range(len(before_restart_result_close))
+                        curr_result_close[j] / prev_result_close[j]
+                        if prev_result_close[j] != 0 else 0
+                        for j in range(len(prev_result_close))
                     ]
 
-                    end_balances = [round(df.at[i-1, 'Restart Balance'][j] * change_factors[j], 2) for j in range(len(change_factors))]
-                    # Nan 처리 >> Nan을 sum하면 Nan이 됨
-                    # total_balance = [0 if np.isnan(x) else x for x in end_balances]
-                    df.at[i, 'End Balance'] = end_balances
+                    try:
+                        end_balances = [
+                            round(df.at[i-1, 'Restart Balance'][j] * change_factors[j], 2) 
+                            for j in range(len(change_factors))
+                        ]
+                    except Exception as e:
+                        display(df)
+                        raise RuntimeError(f"에러 발생!")
+                    
+                    total_balance = sum(end_balances) + df.at[i-1, 'Cash']
 
-                    total_balance = sum(end_balances)
+                    df.at[i,'End Balance'] = end_balances
+                    df.at[i,'Balance'] = total_balance
+
+                else: # 이전달이 Cash만 보유한 경우
+                    total_balance = df.at[i-1, 'Cash'] # 이전달 캐시를 결과 값으로.
+                    df.at[i, 'End Balance'] = None
                     df.at[i, 'Balance'] = total_balance
 
-                    curr_restart_assets = df.at[i, 'Restart Asset']
 
-                    if before_restart_assets == curr_restart_assets:
+                if curr_restart_assets_len > 0: # 이번월에 리벨런싱이 가능하다면?
+                    if prev_restart_assets == curr_restart_assets:
                         df.at[i, 'Restart Balance'] = end_balances
                     else:
-                        df.at[i, 'Restart Balance'] = [total_balance//symbols_len] * symbols_len
-            except Exception as e:
-                print(e)
+                        df.at[i, 'Restart Balance'] = [total_balance//curr_restart_assets_len] * curr_restart_assets_len
+                        df.at[i, 'Do Rebalance'] = True
+                else:
+                    df.at[i, 'Cash'] = total_balance
 
         return df
     
@@ -1270,6 +1289,9 @@ class AssetAllocation:
 
         date_dict = commonHelper.get_date_dict_by_quarter_lazy(quarter_list)
         date_dict = commonHelper.get_trimmed_date_dict(date_dict, start_date, end_date)
+        
+        quarter_list = [q for q in quarter_list if q in date_dict]
+    
         date_dict = commonHelper.adjust_start_data_dict_by_quarter(date_dict, quarter_list[0])
         oldest, latest = commonHelper.get_date_range_from_quarters(date_dict)
 

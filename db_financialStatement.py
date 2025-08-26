@@ -510,7 +510,7 @@ class DB_FinancialStatement(MySQLConnector):
         return df
     
 
-    # 차입금비율
+    # 차입금비율(부채비율)
     # 차입금비율이 개선되가나, 영업기익이 차입금 대비 성장하는 기업은 주식수익률이 높다.
     def get_debt_to_equity_ratio(self, df: pd.DataFrame):
         # 필수 컬럼 확인
@@ -900,8 +900,70 @@ class DB_FinancialStatement(MySQLConnector):
 
         return df
 
+    # 총차입금 성장률
+    # 차입금 : 기업이 실제로 이자 비용을 부담하는 부채
+    # 여기서 총부채라 함음 "단기차입금 + 장기차입금 + 리스부채" 인 값을 말함.
+    # 즉, 부채중에서도 돈을 빌려온 성격만 집계하는 것
+    # 총차입금음 총부채가 아님!!
+    # 총부채가 훨씬 포괄적인 말임. (총 부채 안에 총차입금이 있음.)
+    # 차입금 비율이 낮을수록 파산가능성이 낮음.
+    # 총차입금이 1000억이라는건 단기/장기 차입금이 합처서 1000억이라는거
+    # 차입금은 절대 음수로 나올 수 없음.
+    def get_total_debt_growth(self, df:pd.DataFrame) -> pd.DataFrame:
+        required_columns = ['Symbol', 'Date', 'TotalDebt']
+        if not all(col in df.columns for col in required_columns):
+            return None
+        
+        df = df.copy()
+        df['TotalDebtGrowth'] = None
+
+        df = df.sort_values(by=['Symbol','Date']).reset_index(drop=True)
+        for idx in range(1, len(df)):
+            if df.at[idx, 'Symbol'] == df.at[idx - 1, 'Symbol']:
+                current_rev = df.at[idx, 'TotalDebt']
+                prev_rev = df.at[idx - 1, 'TotalDebt']
+
+                if current_rev is not None and prev_rev and prev_rev != 0:
+                    df.at[idx, 'TotalDebtGrowth'] = (current_rev - prev_rev) / prev_rev
+        
+        return df
+    
+    # 주식성장률 구하기 (N개월)
+    def get_volatility_m(self, df:pd.DataFrame, month:int = 12) -> pd.DataFrame:
+        symbol_to_date = df.groupby('Symbol')['Date'].apply(list).to_dict()
+        all_dates = sum(symbol_to_date.values(), [])
+        all_dates = pd.to_datetime(all_dates)
+        oldest = all_dates.min()
+        latest = all_dates.max()
+        oldest = oldest-relativedelta(years=1)
+        df_stock = AssetAllocation.get_stock_data_with_ma(symbol_to_date.keys(), oldest, latest, [10], 'ma_month', True)
+        df_stock = AssetAllocation.filter_close_last_month(df_stock)
+        
+        column_name = f"Volatility{month}M"
+        for sym, stock in df_stock.items(): 
+            stock["MonthlyReturn"] = stock["Close"].pct_change()
+            stock[column_name] = (
+                stock['MonthlyReturn'].rolling(window=12).std(ddof=1)*np.sqrt(12)
+            )
+            stock = stock.dropna()
+            stock = stock[['Date','Symbol','MonthlyReturn', column_name]]
+            df_stock[sym] = stock
+
+        df['MonthlyReturn'] = None
+        df[column_name] = None
+
+        for i in range(len(df)):
+            date = df.at[i,'Date']
+            sym = df.at[i, 'Symbol']
+            stock = df_stock[sym]
+            mask = (stock['Date'].dt.year == date.year) & (stock['Date'].dt.month == date.month)
+            row = stock.loc[mask]
+            df.at[i, 'MonthlyReturn'] = row['MonthlyReturn'].values[0]
+            df.at[i, column_name] = row[column_name].values[0] # 볼라틸리티
 
 
+
+        return df
 
 
     # SPAC 판별 메서드
@@ -991,7 +1053,7 @@ class DB_FinancialStatement(MySQLConnector):
         df = self.get_pfcr(df)
         df = self.get_liquidation_value(df) # 청산가치
         df = self.get_ev_ebit(df)
-        df = df[['Date', 'Symbol', 'Sector', 'MarketCap', 'Close', 'NetIncome', 'PER','PBR','PCR','PSR','PFCR', 'LiquidationValue', 'EV/EBIT']]
+        df = df[['Date', 'Symbol', 'Sector', 'MarketCap', 'Close', 'NetIncome', 'OperatingIncome', 'PER','PBR','PCR','PSR','PFCR', 'LiquidationValue', 'EV/EBIT']]
         return df
 
 
@@ -1002,10 +1064,12 @@ class DB_FinancialStatement(MySQLConnector):
         df = self.get_gp_a(df)
         df = self.get_roa(df)
         df = self.get_current_ratio(df)
-        df = self.get_debt_to_equity_ratio(df)
-        df = self.get_asset_turnover_ratio(df)
-        df = self.get_gross_profit_margin(df)
-        df = self.get_total_assets_growth(df)
+        df = self.get_debt_to_equity_ratio(df) # 차입금비율
+        df = self.get_asset_turnover_ratio(df) # 총자산회전률
+        df = self.get_gross_profit_margin(df)  # 매출총이익률
+        df = self.get_total_assets_growth(df)  # 자산성장률
+        # CommonStockIssuance : 보통주 - 이 값이 양수일 경우 신규보통주 발행
+        # NetCommonStockIssuance : 순 보통주 발행 - 발행으로 유입된 금액에서 자사주 매입등으로 유출된 금액을 뺀 순액을 말하는거.
         df = df[['Date', 'Symbol', 'Sector', 'MarketCap', 'Close', 'NetIncome', 'OperatingCashFlow', 'CommonStockIssuance', 'NetCommonStockIssuance', 'GP/A', 'ROA', 'CurrentRatio', 'DebtToEquityRatio', 'AssetTurnoverRatio', 'GrossProfitMargin', 'TotalAssetsGrowth']]
         return df
     
@@ -1016,15 +1080,18 @@ class DB_FinancialStatement(MySQLConnector):
     def get_momentun_data(self, df):
         df = self.get_operating_income_growth(df)
         df = self.get_net_income_growth(df)
-        df = df[['Date', 'Symbol', 'Sector', 'MarketCap', 'Close', 'NetIncome','OperatingIncomeGrowth','NetIcomeGrowth']]
+        df = self.get_total_debt_growth(df)
+        df = df[['Date', 'Symbol', 'Sector', 'MarketCap', 'Close', 'NetIncome','OperatingIncomeGrowth','NetIcomeGrowth', 'TotalDebtGrowth']]
         return df
     
 
     def get_fs_data(self, df):
         df_value = self.get_value_data(df)
         df_quality =self.get_quality_date(df)
+        df_momentum = self.get_momentun_data(df)
 
-        df_merged = pd.merge(df_value, df_quality, on=['Date', 'Symbol', 'Sector', 'MarketCap', 'Close', 'NetIncome'])
+        df_merged = pd.merge(df_value, df_quality, on=['Date','Symbol','Sector','MarketCap','Close','NetIncome'])
+        df_merged = pd.merge(df_merged, df_momentum, on=['Date','Symbol','Sector','MarketCap','Close','NetIncome'])
         return df_merged
 
 
@@ -2301,6 +2368,7 @@ class DB_FinancialStatement(MySQLConnector):
                 return df
             
 
+    # 업그레이드 nvca 전략
     def get_upgrade_nvca_rank_table(loaded = True):
         df = DB_FinancialStatement.get_rank_table_quarter(
             label='upgrade_nvca',
@@ -2314,3 +2382,127 @@ class DB_FinancialStatement(MySQLConnector):
             loaded=loaded
         )
         return df
+    
+    # 업그레이드 슈퍼가치 전략
+    def get_upgrade_super_value_rank_table(loaded=True):
+        csv_file_name = 'upgrade_super_value.csv'
+        if loaded:
+            result_df = pd.read_csv(csv_file_name)
+            result_df = result_df.drop(columns=['Unnamed: 0'], errors='ignore')
+            return result_df
+        else:
+            with DB_FinancialStatement() as fs:
+                symbols = fs.get_symbol_list_with_filter(2022)
+                df_quarter = fs.get_fs_all(symbols, commonHelper.EDateType.QUARTER)
+                df_quarter = fs.get_value_data(df_quarter)
+                df_quarter = DB_FinancialStatement.add_quarter_column(df_quarter)
+
+                grouped = df_quarter.groupby('Quarter')
+                dict_rank = { }
+                for q, group in grouped:
+                    group['1/PER'] = 1/group['PER']
+                    group['1/PBR'] = 1/group['PBR']
+                    group['1/PFCR'] = 1/group['PFCR']
+                    group['1/PSR'] = 1/group['PSR']
+
+                    rank_per = group.sort_values(by='1/PER', ascending=False)['Symbol'].tolist()
+                    rank_pbr = group.sort_values(by='1/PBR', ascending=False)['Symbol'].tolist()
+                    rank_pfcr = group.sort_values(by='1/PFCR', ascending=False)['Symbol'].tolist()
+                    rank_psr = group.sort_values(by='1/PSR', ascending=False)['Symbol'].tolist()
+
+                    per_dict = {sym:i for i, sym in enumerate(rank_per)}
+                    pbr_dict = {sym:i for i, sym in enumerate(rank_pbr)}
+                    pfcr_dict = {sym:i for i, sym in enumerate(rank_pfcr)}
+                    psr_dict = {sym:i for i, sym in enumerate(rank_psr)}
+
+                    common_symbol = set(per_dict) & set(pbr_dict) & set(pfcr_dict) & set(psr_dict)
+                    avg_rank = []
+                    for sym in common_symbol:
+                        r1 = per_dict[sym]
+                        r2 = pbr_dict[sym]
+                        r3 = pfcr_dict[sym]
+                        r4 = psr_dict[sym]
+                        avg = (r1 + r2 + r3 + r4) / 4
+                        avg_rank.append((sym, avg))
+
+                    avg_rank_sorted = sorted(avg_rank, key = lambda x:x[1])
+                    final_symbols = [sym for sym, _ in avg_rank_sorted]
+                    dict_rank[q] = final_symbols
+                    
+                dict_rank = DB_FinancialStatement.stuff_df_nan(dict_rank)
+                df = pd.DataFrame(dict_rank)
+                df.to_csv(csv_file_name)
+            return df
+        
+
+    def get_super_quality_rank_table(loaded=True):
+        csv_file_name = 'super_quality_rank.csv'
+        if loaded:
+                result_df = pd.read_csv(csv_file_name)
+                result_df = result_df.drop(columns=['Unnamed: 0'], errors='ignore')
+                return result_df
+        else:
+            with DB_FinancialStatement() as fs:
+                symbol = fs.get_symbol_list_with_filter(2022)
+                df = fs.get_fs_all(symbol, commonHelper.EDateType.YEAR)
+                df = fs.get_fs_data(df)
+                df = DB_FinancialStatement.add_year_column(df)
+
+                grouped = df.groupby('Year')
+                dict_year = {}
+                for y, group in grouped:
+                    group = group.fillna(0).infer_objects(copy=False)
+                    group = group[(group['CommonStockIssuance'] == 0) &
+                                (group['NetIcomeGrowth'] > 0)]
+                    dict_year[y] =  [sym for sym in set(group['Symbol'].tolist()) if pd.notna(sym)]
+                
+                symbol_years = [sym for val in dict_year.values() 
+                                    for sym in val]
+                
+                df = fs.get_fs_all(symbol_years, commonHelper.EDateType.QUARTER)
+                df = fs.get_fs_data(df)
+                df = fs.get_volatility_m(df)
+                df = DB_FinancialStatement.add_quarter_column(df)
+
+                grouped = df.groupby('Quarter')
+                dict_quarter = {}
+                for q, group in grouped:
+                    year = q.split('-')[0]
+                    group = group[(group['OperatingCashFlow'] > 0) &
+                                (group['Symbol'].isin(dict_year[int(year)-1]))&
+                                (group['TotalDebtGrowth'].notna())&
+                                (group['TotalDebtGrowth'] != 0)] # 값에 변화가 없을때 제외한다.
+                    group = group.copy()
+                    group['Income_to_DebtGrowth'] = group['OperatingIncome'] / group['TotalDebtGrowth']
+
+                    if len(group) == 0:
+                        continue
+
+                    rank_gp_a = group.sort_values(by='GP/A', ascending=False)['Symbol'].tolist()
+                    rank_income_to_debt = group.sort_values(by='Income_to_DebtGrowth', ascending=False)['Symbol'].tolist() # 영업이익/차입금증감율
+                    rank_asset_growth = group.sort_values(by='TotalAssetsGrowth')['Symbol'].tolist()
+                    rank_volatility =group.sort_values(by='Volatility12M')['Symbol'].tolist()
+
+                    gp_a_dict = {sym:i for i,sym in enumerate(rank_gp_a)}
+                    income_to_debt_dict = {sym:i for i,sym in enumerate(rank_income_to_debt)}
+                    asset_growth_dict = {sym:i for i,sym in enumerate(rank_asset_growth)}
+                    volatility_dict = {sym:i for i,sym in enumerate(rank_volatility)}
+
+                    common_symbol = set(gp_a_dict) & set(income_to_debt_dict) & set (asset_growth_dict) & set(volatility_dict)
+                    avg_rank = []
+                    for sym in common_symbol:
+                        r1 = gp_a_dict[sym]
+                        r2 = income_to_debt_dict[sym]
+                        r3 = asset_growth_dict[sym]
+                        r4 = volatility_dict[sym]
+                        avg = (r1 + r2 + r3 + r4) / 4
+                        avg_rank.append((sym, avg))
+
+                    avg_rank_sorted = sorted(avg_rank, key = lambda x:x[1])
+                    final_symbols = [sym for sym, _ in avg_rank_sorted]
+                    dict_quarter[q] = final_symbols
+                
+                dict_quarter = DB_FinancialStatement.stuff_df_nan(dict_quarter)
+                df = pd.DataFrame(dict_quarter)
+                df.to_csv(csv_file_name)
+                return df
