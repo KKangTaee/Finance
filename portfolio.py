@@ -304,11 +304,21 @@ class Portfolio:
         df_rank = DB_FinancialStatement.get_super_quality_rank_table()
         df = AssetAllocation.calculation_quarter_rank(start_date, end_date, df_rank, 20)
         return df
+    
+    def fama_last_weapon(start_date, end_date):
+        df_rank = DB_FinancialStatement.get_fama_last_weapon_rank_table()
+        df = AssetAllocation.calculation_quarter_rank(start_date, end_date, df_rank, 20)
+        return df
+    
+    def super_value_and_quality(start_date, end_date):
+        df_rank = DB_FinancialStatement.get_super_value_and_quality_rank_table()
+        df = AssetAllocation.calculation_quarter_rank(start_date, end_date, df_rank, 20)
+        return df
 
 
     def show_portfolio_eft():
         start_date = '2013-12-01'
-        end_date = '2025-08-19'
+        end_date = '2025-08-31'
         allocations = [
             {'Harry Brown': Portfolio.harry_browne_permanent_portfolio(start_date, end_date)},
             {'Ray Dailo' : Portfolio.ray_dalio_all_seasons(start_date, end_date)},
@@ -334,18 +344,20 @@ class Portfolio:
         start_date = '2013-12-01'
         end_date = '2025-08-19'
         allocations = [
-            {'NVAC': Portfolio.nvca(start_date, end_date)},
+            #{'NVAC': Portfolio.nvca(start_date, end_date)},
             {'Super Value':Portfolio.super_value(start_date,end_date)},
             # {'New Magic':Portfolio.new_magic(start_date,end_date)},
             # {'F Score' : Portfolio.f_score(start_date, end_date)},
             # {'Relative Momentum' : Portfolio.relative_momentum(start_date, end_date)},
             # {'Magic Multify' : Portfolio.magic_multify(start_date,end_date)},
             # {'Low PER' : Portfolio.low_per(start_date, end_date)},
-            # {'Fama High Return' : Portfolio.fama_high_return(start_date, end_date)},
+            {'Fama High Return' : Portfolio.fama_high_return(start_date, end_date)},
             # {'Income Momentum' : Portfolio.income_mementum(start_date, end_date)},
-            {'Upgrade NVAC' : Portfolio.upgrade_nvca(start_date, end_date)},
+            # {'Upgrade NVAC' : Portfolio.upgrade_nvca(start_date, end_date)},
             {'Upgrade Super Value': Portfolio.upgrade_super_value(start_date, end_date)},
-            {'Super Quality' : Portfolio.super_quality(start_date, end_date)}
+            # {'Super Quality' : Portfolio.super_quality(start_date, end_date)},
+            {'Fama Last Weapon' : Portfolio.fama_last_weapon(start_date, end_date)},
+            {'Super Value and Quality' : Portfolio.super_value_and_quality(start_date, end_date)},
         ]
 
         Portfolio.plot_multiple_balances_over_time([list(d.values())[0] for d in allocations],
