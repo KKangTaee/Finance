@@ -269,11 +269,15 @@ class DB_FinancialStatement(MySQLConnector):
                 price_date_month = price_df['Date'].dt.to_period('M').astype(str)
                 price_df = price_df[price_date_month.isin(filter_date_month)].sort_values(['Symbol','Date']).reset_index(drop=True)
 
-                # 4. 일(day)을 filter_date에서 가져와서 수정
-                #    (연/월 순서가 같다고 가정)
-                price_df['Date'] = price_df['Date'].combine(
-                    filter_date, 
-                    lambda base, match: pd.Timestamp(base).replace(day=match.day))
+                try:
+                    # 4. 일(day)을 filter_date에서 가져와서 수정
+                    #    (연/월 순서가 같다고 가정)
+                    price_df['Date'] = price_df['Date'].combine(
+                        filter_date, 
+                        lambda base, match: pd.Timestamp(base).replace(day=match.day))
+                except Exception as e:
+                    print(f"{symbol}")
+
 
                 # 5. 결과 저장
                 price_df_list.append(price_df)
@@ -1018,36 +1022,6 @@ class DB_FinancialStatement(MySQLConnector):
 
         return df
 
-    def get_data(self, symbols:list, dateType:EDateType, min_year:int = 0):
-        df = self.get_fs_all(symbols=symbols, dateType=dateType, min_year= min_year)
-      
-        df = self.get_psr(df)
-        df = self.get_gp_a(df)
-        df = self.get_por(df)
-        df = self.get_ev_ebit(df)
-        df = self.get_per(df)
-        df = self.get_current_ratio(df)
-        df = self.get_pbr(df)
-        df = self.get_debt_to_equity_ratio(df)
-        df = self.get_pcr(df)
-        df = self.get_pfcr(df)
-        df = self.get_gross_profit_margin(df)
-        df = self.get_operating_income_growth(df)
-        df = self.get_roe(df) # 자기자본이익률
-        df = self.get_operating_margin(df) # 영업이익률 : 매출대비 영업이익률
-        df = self.get_free_cash_flow_margin(df) # 잉여현금흐름률 : 매출 대비 잉여현금흐름 비율
-        df = self.get_revenue_growth(df) # 매출성장률
-        df = self.get_interest_coverage_ratio(df) # 이자보상배율 : 영업이익이 이자비용을 몇 배나 감당할 수 있는지
-        
-        df = df[['Date', 'Symbol', 'Sector', 'MarketCap', 'Close', 'DilutedEPS', 'TotalRevenue', 'NetIncome', 
-                 'OperatingIncome', 'GrossProfitMargin', 'IncomeGrowth', 'PSR', 'GP/A', 'EV/EBIT', 'PER',
-                 'CurrentRatio','PBR', 'DebtToEquityRatio', 'PCR', 'PFCR', 'ROE','OperatingMargin', 
-                 'FreeCashFlowMargin','RevenueGrowth','InterestCoverageRatio']]
-        
-        df = df.dropna(subset=["MarketCap"])
-        df = df.infer_objects(copy=False)
-
-        return df
     
 
     #------------------------
@@ -1092,6 +1066,7 @@ class DB_FinancialStatement(MySQLConnector):
         df = df[['Date', 'Symbol', 'Sector', 'MarketCap', 'Close', 'NetIncome','OperatingIncomeGrowth','NetIncomeGrowth', 'TotalDebtGrowth']]
         return df
 
+
     def get_fs_data(self, df):
         df_value = self.get_value_data(df)
         df_quality =self.get_quality_date(df)
@@ -1100,32 +1075,7 @@ class DB_FinancialStatement(MySQLConnector):
         df_merged = pd.merge(df_value, df_quality, on=['Date','Symbol','Sector','MarketCap','Close','NetIncome'])
         df_merged = pd.merge(df_merged, df_momentum, on=['Date','Symbol','Sector','MarketCap','Close','NetIncome'])
         return df_merged
-
-
-
-    #----------------
-    # 스코어링 리스트 조회 (연간/분기)
-    #----------------
-    def save_file_fs_score_rank(self, symbols:list):
-
-        # 2. 연간/분기 재무재표 로드
-        df_year = self.get_data(symbols, EDateType.YEAR)
-        df_year_stats = DB_FinancialStatement.calc_sector_statistics(df_year)
-        
-        df_quarter = self.get_data(symbols, EDateType.QUARTER)
-        df_quarter_stats = DB_FinancialStatement.calc_sector_statistics(df_quarter)
-
-        df_year_score = DB_FinancialStatement.calc_scores(df_year, df_year_stats)
-        df_year_score = DB_FinancialStatement.aggregate_weighted_scores(df_year_score)
-        
-        df_quarter_score = DB_FinancialStatement.calc_scores(df_quarter, df_quarter_stats)
-        df_quarter_score = DB_FinancialStatement.aggregate_weighted_scores(df_quarter_score, dateType= EDateType.QUARTER)
-
-        df_year_score.to_csv("df_year_score_rank.csv", index=False)
-        df_quarter_score.to_csv("df_quarter_score_rank.csv", index=False)
-
-        display(df_year_score)
-        display(df_quarter_score)
+    
 
     
 
@@ -1737,6 +1687,7 @@ class DB_FinancialStatement(MySQLConnector):
         return df
     
 
+    @staticmethod
     def filter_common_quarters(df: pd.DataFrame, symbols: list) -> pd.DataFrame:
         if not symbols:
             print("⚠️ 유효한 Symbol 리스트가 비어 있습니다. 빈 DataFrame 반환.")
@@ -1768,58 +1719,7 @@ class DB_FinancialStatement(MySQLConnector):
     
 
 
-    def show_rank_by_fs(start_quarter ='2024-Q2',  end_quarter ='2025-Q1'):
-        symbol_columns = []
-        column_names = []
-        
-        with DB_FinancialStatement() as fs:
-            quarters = DB_FinancialStatement.generate_quarter_range(start_quarter, end_quarter) # 범위 리스트 구하기
-            min_year = int(quarters[3].split('-Q')[0]) - 3 # 필터 된 날짜.
 
-            # symbols = fs.getSymbolListByFilter(min_year) # 필터링된 날짜까지만 추출
-            symbols = fs.get_symbol_list_with_filter(min_year)
-            print(f"{min_year} 이전 상장 티커 수 : {len(symbols)}")
-
-            df_year = fs.get_data(symbols, EDateType.YEAR, min_year)
-            df_quarter = fs.get_data(symbols, EDateType.QUARTER)
-            df_quarter = DB_FinancialStatement.add_quarter_column(df_quarter)
-            
-            valid_symbols = DB_FinancialStatement.get_symbols_with_quarter_range(df_quarter, start_quarter, end_quarter)
-
-            df_quarter = DB_FinancialStatement.filter_common_quarters(df_quarter, valid_symbols)   
-            df_quarter_list = DB_FinancialStatement.create_quarter_groups(df_quarter) # 4분기씩 리스트로 구함
-
-            for df_quarter in df_quarter_list:
-                year = df_quarter.iloc[-1]['Date'].year
-                df_year = DB_FinancialStatement.filter_annual_data(df_year, year-1, 3)
-
-                column_name = df_quarter.iloc[-1]['Quarter']
-
-                df_year_stat = DB_FinancialStatement.calc_sector_statistics(df_year)
-                df_year_score = DB_FinancialStatement.calc_scores(df_year, df_year_stat)
-                df_year_score_total = DB_FinancialStatement.aggregate_weighted_scores(df_year_score)
-
-                df_quarter_stat = DB_FinancialStatement.calc_sector_statistics(df_quarter)
-                df_quarter_score = DB_FinancialStatement.calc_scores(df_quarter, df_quarter_stat)
-                df_quarter_score_total = DB_FinancialStatement.aggregate_weighted_scores(df_quarter_score, dateType= EDateType.QUARTER)
-
-                df_result = DB_FinancialStatement.combine_scores(df_year_score_total, df_quarter_score_total)   
-                df_result.to_csv(f'{column_name}_rank_01.csv', index = True)
-
-                # Symbol만 Series로 추출하고 인덱스 초기화
-                symbol_col = df_result['Symbol'].reset_index(drop=True)
-                symbol_columns.append(symbol_col)
-                column_names.append(column_name)
-
-        if len(symbol_columns) > 0:
-            # 루프 끝난 뒤: 컬럼 방향으로 병합
-            final_df = pd.concat(symbol_columns, axis=1)
-            # 컬럼명 지정
-            final_df.columns = column_names
-            final_df.to_csv(f'rank_top_qurter_{datetime.now()}.csv', index= True)
-            display(final_df)
-
-    
     @staticmethod
     def get_fs_data_static(symbols:list=[], date_type:EDateType = EDateType.QUARTER, min_year:int = 0):
         with DB_FinancialStatement() as fs:
@@ -1835,64 +1735,6 @@ class DB_FinancialStatement(MySQLConnector):
                 df = DB_FinancialStatement.add_year_column(df)
 
             return df
-
-    @staticmethod
-    def get_rank_table_from_fs(
-        csv_file_name: str,
-        loaded: bool,
-        filter_fn: Callable[[pd.DataFrame], pd.DataFrame],
-        sort_key_fn: Callable[[pd.DataFrame], pd.Series],
-        top_n: int = 20
-    ) -> pd.DataFrame:
-        """
-        공통 랭킹 테이블 생성 함수.
-
-        Parameters:
-            csv_file_name: 저장/불러올 CSV 파일명
-            loaded: True면 CSV 불러오기, False면 새로 생성
-            filter_fn: df -> filtered_df (필터 조건 함수)
-            sort_key_fn: df -> pd.Series (정렬 기준 함수)
-            top_n: 상위 몇 개 종목만 가져올지
-        
-        Returns:
-            pd.DataFrame: 쿼터별 상위 심볼 테이블
-        """
-
-        if loaded:
-            result_df = pd.read_csv(csv_file_name)
-            result_df = result_df.drop(columns=['Unnamed: 0'], errors='ignore')
-            return result_df
-
-        else:
-            with DB_FinancialStatement() as fs:
-                symbols = fs.get_symbol_list_with_filter(2022)
-                df = fs.get_fs_all(symbols, EDateType.QUARTER)
-                df = fs.get_value_data(df)
-                df = DB_FinancialStatement.add_quarter_column(df)
-
-                df = filter_fn(df).copy()  # 필터링
-                df['__sort_key__'] = sort_key_fn(df)  # 정렬 기준 컬럼 추가
-
-                group_dfs = [group for _, group in df.groupby('Quarter')]
-
-                group_dict = {}
-                max_len = 0
-
-                for group in group_dfs:
-                    quarter = group.iloc[0]['Quarter']
-                    top_symbols = group.sort_values(by='__sort_key__', ascending=False)['Symbol'].tolist()
-                    top_symbols = top_symbols[:top_n]
-                    group_dict[quarter] = top_symbols
-                    max_len = max(max_len, len(top_symbols))
-
-                # 길이 맞추기 (NaN 채우기)
-                for key, value in group_dict.items():
-                    value.extend([np.nan] * (max_len - len(value)))
-
-                result_df = pd.DataFrame(group_dict)
-                result_df.to_csv(csv_file_name, index=False)
-
-                return result_df
             
 
     @staticmethod
@@ -2046,7 +1888,7 @@ class DB_FinancialStatement(MySQLConnector):
 
             return df
         
-
+    @staticmethod
     def stuff_df_nan(some_dict:dict) -> dict:
         
         max_len = 0
@@ -2060,6 +1902,7 @@ class DB_FinancialStatement(MySQLConnector):
         
 
     # 필터랑 소팅을 통해 분기 데이터를 구함.
+    @staticmethod
     def get_rank_table_quarter(label, 
                     preprocess_func=None, 
                     filter_func=None, 
@@ -2150,31 +1993,45 @@ class DB_FinancialStatement(MySQLConnector):
     #  - 즉, 주식시장에서 기업의 가치를 그 기업의 자산보다 낮게 측정했다는 뜻. 
     @staticmethod
     def get_ncva_rank_table(loaded=True) -> pd.DataFrame:
-        return DB_FinancialStatement.get_rank_table_from_fs(
-            csv_file_name='naive_ncva.csv',
-            loaded=loaded,
-            filter_fn=lambda df: df[(df['LiquidationValue'] > df['MarketCap']) & (df['NetIncome'] > 0)],
-            sort_key_fn=lambda df: df['LiquidationValue'] / df['MarketCap'],
-            top_n=20
+        df_rank = DB_FinancialStatement.get_rank_table_quarter(
+            label="Origin_NVAC",
+            filter_func=lambda df: df[(df['LiquidationValue'] > df['MarketCap']) & (df['NetIncome'] > 0)],
+            rank_key=lambda df: df['LiquidationValue'] / df['MarketCap'],
+            ascending=False,
+            top_n=20,
+            loaded=loaded
         )
+        return df_rank
 
     def get_super_value_rank_table(loaded=True) -> pd.DataFrame:
-        return DB_FinancialStatement.get_rank_table_from_fs(
-            csv_file_name='super_value.csv',
-            loaded=loaded,
-            filter_fn=lambda df: df,  # 필터 없음
-            sort_key_fn=lambda df: ((1 / df['PER']) + (1 / df['PBR']) + (1 / df['PCR']) + (1 / df['PSR'])) / 4,
-            top_n=20
-        )
+        csv_file_name = 'super_value_rank.csv'
+        if loaded:
+            result_df = pd.read_csv(csv_file_name)
+            result_df = result_df.drop(columns=['Unnamed: 0'], errors='ignore')
+            return result_df
+        else:
+            df_quarter = DB_FinancialStatement.get_fs_data_static(min_year=2022)
+            dict_quarter = DB_FinancialStatement.get_rankings_avg_to_dict(df_quarter=df_quarter, selected_metrics=['PER','PBR','PCR','PSR'])
+            dict_quarter = DB_FinancialStatement.stuff_df_nan(dict_quarter)
+            df = pd.DataFrame(dict_quarter)
+            df.to_csv(csv_file_name)
+            return df
     
+
     def get_new_magic_rank_table(loaded=True) -> pd.DataFrame:
-        return DB_FinancialStatement.get_rank_table_from_fs(
-            csv_file_name='new_magic.csv',
-            loaded=loaded,
-            filter_fn=lambda df: df,  # 필터 없음
-            sort_key_fn=lambda df:((1/df['PBR']) +(df['GP/A'])),
-            top_n=20
-        )
+        csv_file_name = 'new_magic_rank.csv'
+        if loaded:
+            result_df = pd.read_csv(csv_file_name)
+            result_df = result_df.drop(columns=['Unnamed: 0'], errors='ignore')
+            return result_df
+        else:
+            df_quarter = DB_FinancialStatement.get_fs_data_static(min_year=2022)
+            dict_quarter = DB_FinancialStatement.get_rankings_avg_to_dict(df_quarter=df_quarter, selected_metrics=['PBR','GP/A'])
+            dict_quarter = DB_FinancialStatement.stuff_df_nan(dict_quarter)
+            df = pd.DataFrame(dict_quarter)
+            df.to_csv(csv_file_name)
+            return df
+        
     
     def get_f_score_rank_table(loaded = True) -> pd.DataFrame:
 
@@ -2194,18 +2051,19 @@ class DB_FinancialStatement(MySQLConnector):
                 df_quarter = fs.get_value_data(df_quarter)
                 df_quarter = DB_FinancialStatement.add_quarter_column(df_quarter)
                 df_quarter['1/PER'] = 1/df_quarter['PER']
-                # df_quarter = df_quarter[df_quarter['Date']== '2023-12-31']    
-
 
                 dict_df = {}
                 grouped = df_quarter.groupby('Quarter')
-                for idx, group in grouped:
-                    display(idx)
+                for q, group in grouped:
 
-                    check_symbols = df_rank[idx].dropna().tolist()
+                    if q not in df_rank:
+                        print(f"{q} is not in df_rank")
+                        continue
+
+                    check_symbols = df_rank[q].dropna().tolist()
                     df_filter = group[group['Symbol'].isin(check_symbols)]
                     df_filter = df_filter.sort_values(by='1/PER', ascending=False)
-                    dict_df[idx] = df_filter['Symbol'].tolist()
+                    dict_df[q] = df_filter['Symbol'].tolist()
                 
                 max_len = max(len(v) for v in dict_df.values())
                 padded = {k: v + [None] * (max_len - len(v)) for k, v in dict_df.items()}
@@ -2337,11 +2195,11 @@ class DB_FinancialStatement(MySQLConnector):
                 symbols = fs.get_symbol_list_with_filter(2022)
                 df_year = fs.get_fs_all(symbols, commonHelper.EDateType.YEAR)
                 df_year = fs.get_momentun_data(df_year)
-                df_year = df_year.dropna(subset=['NetIcomeGrowth'])
+                df_year = df_year.dropna(subset=['NetIncomeGrowth'])
                 df_year = DB_FinancialStatement.add_year_column(df_year)
                 df_quarter = fs.get_fs_all(symbols, commonHelper.EDateType.QUARTER)
                 df_quarter = fs.get_momentun_data(df_quarter)
-                df_quarter = df_quarter.dropna(subset=['NetIcomeGrowth'])
+                df_quarter = df_quarter.dropna(subset=['NetIncomeGrowth'])
                 df_quarter = DB_FinancialStatement.add_quarter_column(df_quarter)
                 
                 grouped_year = df_year.groupby('Year')
@@ -2350,25 +2208,25 @@ class DB_FinancialStatement(MySQLConnector):
                 rank_year_dict = {}
                 for y, group in grouped_year:
                     y_op = group.sort_values(by='OperatingIncomeGrowth', ascending = False)['Symbol'].tolist()
-                    y_net = group.sort_values(by='NetIcomeGrowth', ascending =False)['Symbol'].tolist()
+                    y_net = group.sort_values(by='NetIncomeGrowth', ascending =False)['Symbol'].tolist()
 
                     if y not in rank_year_dict:
                         rank_year_dict[y] = {}
 
                     rank_year_dict[y]['OperatingIncomeGrowth'] = {sym:i for i, sym in enumerate(y_op)}
-                    rank_year_dict[y]['NetIcomeGrowth'] = {sym:i for i, sym in enumerate(y_net)}
+                    rank_year_dict[y]['NetIncomeGrowth'] = {sym:i for i, sym in enumerate(y_net)}
 
                 dict_rank = {}
                 for q, group in grouped_quarter:
                     q_op = group.sort_values(by='OperatingIncomeGrowth', ascending = False)['Symbol'].tolist()
-                    q_net = group.sort_values(by='NetIcomeGrowth', ascending =False)['Symbol'].tolist()
+                    q_net = group.sort_values(by='NetIncomeGrowth', ascending =False)['Symbol'].tolist()
 
                     rank_op = {sym:i for i, sym in enumerate(q_op)}
                     rank_net ={sym:i for i, sym in enumerate(q_net)}
 
                     year = int(q.split('-')[0]) - 1 # 현분기 데이터를 기준이니, 전년도 데이터를 찾아야 함.
                     rank_op_y = rank_year_dict[year]['OperatingIncomeGrowth']
-                    rank_net_y = rank_year_dict[year]['NetIcomeGrowth']
+                    rank_net_y = rank_year_dict[year]['NetIncomeGrowth']
 
                     common_symbol = set(rank_op) & set(rank_net) & set(rank_op_y) & set(rank_net_y)
                     avg_rank = []
@@ -2475,7 +2333,7 @@ class DB_FinancialStatement(MySQLConnector):
                 for y, group in grouped:
                     group = group.fillna(0).infer_objects(copy=False)
                     group = group[(group['CommonStockIssuance'] == 0) &
-                                (group['NetIcomeGrowth'] > 0)]
+                                (group['NetIncomeGrowth'] > 0)]
                     dict_year[y] =  [sym for sym in set(group['Symbol'].tolist()) if pd.notna(sym)]
                 
                 symbol_years = [sym for val in dict_year.values() 
@@ -2615,7 +2473,7 @@ class DB_FinancialStatement(MySQLConnector):
     #-------------------
     # 각각의 원하는 옵션들을 선택해서 평균을 구하는 함수
     #-------------------
-    def get_rankings_avg_to_dict(df_quarter, filter_quarter, selected_metrics=None):
+    def get_rankings_avg_to_dict(df_quarter, filter_quarter:dict=None, selected_metrics=None):
         
         if selected_metrics is None:
             selected_metrics =  [
@@ -2661,7 +2519,10 @@ class DB_FinancialStatement(MySQLConnector):
         grouped = df_quarter.groupby('Quarter')
         for q, df in grouped:
             df = df.copy()
-            df = df[df['Symbol'].isin(filter_quarter[q])]  # f_score 필터링
+            
+            if filter_quarter is not None:
+                df = df[df['Symbol'].isin(filter_quarter[q])]  # f_score 필터링
+            
             df['Income_to_DebtGrowth'] = df['OperatingIncome'] / df['TotalDebtGrowth']
             
             rank_dicts = {}
@@ -2724,3 +2585,33 @@ class DB_FinancialStatement(MySQLConnector):
                 df = pd.DataFrame(dict_quarter)
                 df.to_csv(csv_file_name)
             return df
+
+
+
+    # 특정 컬럼의 기본값 구하기
+    # - 평균 말고 중앙값.
+    # - 윈저라이즈 활용 (좌우 몇퍼센트 제거)(비 이상적인 값 제거)
+    @staticmethod
+    def get_avg_value_by_sector(df_fs, column_name:str):
+        from scipy.stats.mstats import winsorize
+        import warnings
+        warnings.filterwarnings("ignore", category=UserWarning, module="numpy")
+
+        group_q = df_fs.groupby('Quarter')
+        dict_q = {}
+        for q, df_q in group_q:
+            group_s = df_q.groupby('Sector')
+            dict_s = {}
+            for s, df_s in group_s:
+                if df_s.empty:
+                    continue
+                pbr_val = df_s[column_name].dropna().to_numpy()
+                pbr_winsorized = winsorize(pbr_val, limits=[0.05, 0.05])
+                mid = pd.Series(pbr_winsorized).median()
+                dict_s[s] = mid
+            dict_q[q]= dict_s
+
+
+        df =pd.DataFrame.from_dict(dict_q, orient='columns')
+        df = df.reset_index(names='Selctor')
+        return df

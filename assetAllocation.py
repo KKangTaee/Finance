@@ -2,6 +2,7 @@ from operator import imod
 import pandas as pd
 import yfinance as yf
 import numpy as np
+import matplotlib.pyplot as plt
 
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
@@ -1054,12 +1055,7 @@ class AssetAllocation:
         return df
 
 
-    # NCVA 전략
-    # 아래의 조건에 맞는 종목 찾기
-    #   1. 유동자산 - 총부채 > 시가총액
-    #   2. 분기 수익률 > 0
-    # * 1,2번 조건에 맞는 주식들 중에서 (유동자산 - 총부채) / 시가총액 비중이 가장 높은 주식 매수하기
-    # * df_ncva 에 랭크 데이터가 들어옴.
+
     def strategy_quarter_rank(symbols_dfs:dict, df_ncva_rank:pd.DataFrame, date_dict:dict, init_balance = 10000):
 
         df = AssetAllocation.merge_to_dfs(symbols_dfs)
@@ -1151,6 +1147,158 @@ class AssetAllocation:
                         df.at[i, 'Do Rebalance'] = True
                 else:
                     df.at[i, 'Cash'] = total_balance
+
+        return df
+    
+    def strategy_quarter_rankV2(symbols_dfs:dict, df_rank:pd.DataFrame, date_dict:dict, init_balance = 10000, is_use_mma = False):
+    
+        # 이평선에 따른 필터링 처리
+        def filter_mma(symbol, result_close, mma, restart_assets):
+            # 이평선보다 낮은 애들은 리벨런싱에서 제외한다.
+            compare_to_dict = dict(zip(symbol, zip(result_close, mma)))
+            filter_restart_assets = [sym for sym in restart_assets if compare_to_dict[sym][0] >= compare_to_dict[sym][1]]
+            return filter_restart_assets
+        
+        # 다음 보유 자산 구하기
+        def get_restart_assets(curr_assets:list, is_use_mma):
+                result_assets = []
+                # 리스타트 필터링
+                if not curr_assets:
+                    print(f"리스트가 비어있음 : {date}")
+                else:
+                    # 여기서 필터링을 할건지 안할건지 체크
+                    result_assets = (
+                        filter_mma(
+                            df.at[i, 'Symbol'],
+                            df.at[i, 'Result Close'],
+                            df.at[i, mma_col],
+                            curr_assets
+                        )
+                        if is_use_mma else curr_assets
+                    ) 
+                return result_assets
+        
+        # 이전달에 투자한 자산의 결과 리스트 반환
+        def get_end_balance(prev_assets, s_symbol, s_close, e_symbol, e_close):
+            end_balance = []
+            if prev_assets:
+                start_close_dict = dict(zip(s_symbol, s_close))
+                end_close_dict = dict(zip(e_symbol, e_close))
+
+                change_ratio = [
+                    end_close_dict[sym] / start_close_dict[sym]
+                    if start_close_dict[sym] != 0
+                        else 0
+                    for sym in prev_assets
+                ]
+                start_balance = df.at[i-1, 'Restart Balance']
+                end_balance = [round(x*y,2) for x,y in zip(start_balance, change_ratio)]
+                df.at[i, 'End Balance'] = end_balance
+
+            return end_balance
+        
+        df = AssetAllocation.merge_to_dfs(symbols_dfs)
+
+        columns = [col for col in df.columns if col not in ['Adj Close','Close','Dividends','Condition']]
+        df = df[columns]
+
+        # 도중에 상폐된 심볼에 대한 제거
+        symbol_counts = df['Symbol'].astype(str).value_counts()
+        main_pattern = symbol_counts.index[0]
+        df = df[df['Symbol'].astype(str) == main_pattern].reset_index()
+        df = df.drop(columns=["index"])
+
+        df['End Balance'] = None        # 지난 달 Restart Asset의 결과        
+        df['Restart Asset'] = None      # 현 월 마지막에 리벨런싱 처리할 대상
+        df['Restart Balance'] = None    # 리벨런싱의 자산 배분
+        df['Cash'] = 0                  # 현금 보유 상황
+        df['Balance'] = None            # 토탈 비용
+        df['Do Rebalance'] = False      # 현 월에 리벨런싱이 되었나
+        df['Quarter'] = None            # 쿼터 값
+
+        # "MMA_숫자" 컬럼이름 찾기 >> 후에 값이 변경될수도 있으니 
+        mma_col = [col for col in df.columns if col.lower().startswith("mma_")][0]
+
+        
+        for i in range(len(df)):
+            date = df.at[i, 'Date']
+
+            # 이번 분기의 랭크 데이터
+            quarter_rank_assets = []
+            for q, (start, end) in date_dict.items():
+                if start <= date <= end:
+                    df.at[i, 'Quarter'] = q
+                    
+                    if q in df_rank.columns:
+                        quarter_rank_assets = df_rank[q].dropna().tolist()
+
+            # 자산배분 플로우
+            curr_assets = get_restart_assets(quarter_rank_assets, is_use_mma)
+            df.at[i, 'Restart Asset'] = curr_assets
+
+            if i == 0:
+                if not curr_assets:
+                    df.at[0, 'Cash'] = init_balance
+                else:
+                    # 한 재산에 투자할 수 있는 맥시멈 가격 : 1000으로 잡아놓음
+                    curr_assets_len = len(curr_assets)
+                    one_invest_balance = min(1000, init_balance//curr_assets_len)
+
+                    df.at[0, 'Restart Balance'] = [one_invest_balance] * curr_assets_len
+                    df.at[0, 'Cash'] = init_balance - (one_invest_balance*curr_assets_len)
+                
+                df.at[0, 'Balance'] =init_balance
+            else:  
+                prev_assets = df.at[i-1, 'Restart Asset']
+
+                end_balance = get_end_balance(prev_assets, 
+                                            df.at[i-1,'Symbol'], 
+                                            df.at[i-1,'Result Close'],
+                                            df.at[i, 'Symbol'],
+                                            df.at[i, 'Result Close'])
+                        
+                now_total_balance = (
+                    df.at[i-1, 'Cash']
+                    if not end_balance
+                        else  df.at[i-1, 'Cash'] + sum(end_balance)
+                )
+
+                df.at[i, 'Balance'] = now_total_balance
+
+                if not curr_assets:
+                    df.at[i, 'Cash'] = now_total_balance       
+                else:
+                    # 지난번과 같으니 그냥 그대로 쭉 진행
+                    if prev_assets == curr_assets:
+                        df.at[i, 'Restart Balance'] = end_balance
+                        df.at[i, 'Cash'] = df.at[i-1, 'Cash']
+
+                    # 아니라면? (분기 리벨런싱이 이루어졌거나, 아니면 이평선 아웃으로 인해 나감)
+                    else:
+                        curr_assets_len = len(curr_assets)
+                        one_invest_balance = min(1000, now_total_balance//curr_assets_len)
+
+                        restart_balance = []
+                        cash = 0
+                
+                        if df.at[i,'Quarter'] != df.at[i-1, 'Quarter']:
+                            restart_balance = [one_invest_balance] * curr_assets_len
+                            cash = now_total_balance - (one_invest_balance*curr_assets_len)
+                            df.at[i, 'Do Rebalance'] = True
+                        else:
+                            prev_balance_dict = dict(zip(prev_assets, end_balance))
+                            
+                            for sym in curr_assets:
+                                if sym in prev_balance_dict:
+                                    restart_balance.append(prev_balance_dict[sym])
+                                else:
+                                    restart_balance.append(one_invest_balance)
+
+                            cash = now_total_balance - sum(restart_balance)
+
+                        df.at[i, 'Restart Balance'] = restart_balance
+                        df.at[i, 'Cash'] = cash
+
 
         return df
     
@@ -1291,11 +1439,106 @@ class AssetAllocation:
         date_dict = commonHelper.get_trimmed_date_dict(date_dict, start_date, end_date)
         
         quarter_list = [q for q in quarter_list if q in date_dict]
-    
+
         date_dict = commonHelper.adjust_start_data_dict_by_quarter(date_dict, quarter_list[0])
         oldest, latest = commonHelper.get_date_range_from_quarters(date_dict)
 
         df = AssetAllocation.get_stock_data_with_ma(symbols=symbols, start_date=oldest, end_date=latest, mas=[10], type='ma_month', use_db_stock=True)
         df = AssetAllocation.filter_close_last_month(df)
-        df = AssetAllocation.strategy_quarter_rank(df, df_rank, date_dict)
+        df = AssetAllocation.strategy_quarter_rankV2(df, df_rank, date_dict)
         return df
+    
+
+    #-------------------
+    # n개의 포트폴리오를 n:m 비중으로 결합
+    #-------------------
+    def combine_portfolios(portfolio_list, ratio, init_balance=10000):
+        """
+        portfolio_list: [{'Name1': df1}, {'Name2': df2}, ...] 형태
+        ratio: 각 포트폴리오 비중 리스트
+        init_balance: 초기 투자금
+        """
+        # 포트폴리오 이름 추출
+        names = [list(p.keys())[0] for p in portfolio_list]
+        dfs = [list(p.values())[0] for p in portfolio_list]
+        
+        # 비중 정규화
+        weights = np.array(ratio) / np.sum(ratio)
+        
+        # 날짜 기준 merge (각각 이름 붙여서 merge)
+        balances = [
+            df[["Date", "Balance"]].rename(columns={"Balance": f"{name} Balance"})
+            for name, df in zip(names, dfs)
+        ]
+        combined = balances[0]
+        for b in balances[1:]:
+            combined = pd.merge(combined, b, on="Date", how="inner")
+        
+        # 가중 평균 포트폴리오 밸런스 (init_balance 반영)
+        balance_cols = [f"{name} Balance" for name in names]
+        weighted_balance = (combined[balance_cols].values @ weights)
+        combined["Portfolio_Balance"] = weighted_balance / weighted_balance[0] * init_balance
+        
+        # 성과 지표 계산
+        start_balance = combined["Portfolio_Balance"].iloc[0]
+        end_balance = combined["Portfolio_Balance"].iloc[-1]
+        start_date = pd.to_datetime(combined["Date"].iloc[0])
+        end_date = pd.to_datetime(combined["Date"].iloc[-1])
+        years = (end_date - start_date).days / 365.25
+        
+        cagr = (end_balance / start_balance) ** (1/years) - 1
+        returns = combined["Portfolio_Balance"].pct_change().dropna()
+        std_dev = returns.std() * np.sqrt(12)
+        sharpe = returns.mean()/returns.std() * np.sqrt(12)
+        
+        # MDD 계산
+        roll_max = combined["Portfolio_Balance"].cummax()
+        drawdown = combined["Portfolio_Balance"]/roll_max - 1
+        mdd = drawdown.min()
+        
+        # 결과 DataFrame
+        result = pd.DataFrame([{
+            "Name": " + ".join(names),
+            "Start Date": start_date.date(),
+            "End Date": end_date.date(),
+            "Start Balance": start_balance,
+            "End Balance": end_balance,
+            "Annualized Return (CAGR)": cagr,
+            "Standard Deviation": std_dev,
+            "Sharpe Ratio": sharpe,
+            "Maximum Drawdown": mdd
+        }])
+        
+        return result, combined
+    
+
+    def show_graph_by_combined_portfolio(series, init_balance=10000):
+        """
+        개별 포트폴리오와 합성 포트폴리오를 동일한 초기값(init_balance)으로
+        스케일 조정해서 비교 시각화 (포트폴리오 이름은 series에서 자동 추출)
+        """
+        series["Date"] = pd.to_datetime(series["Date"])
+        series = series.set_index("Date")
+        
+        plt.figure(figsize=(12, 6))
+        
+        # Balance 컬럼 자동 추출 (Portfolio_Balance 제외)
+        balance_cols = [col for col in series.columns if col.endswith("Balance") and col != "Portfolio_Balance"]
+        
+        # 개별 포트폴리오 (정규화 후 그리기)
+        for col in balance_cols:
+            normalized = series[col] / series[col].iloc[0] * init_balance
+            plt.plot(series.index, normalized, label=col.replace(" Balance", ""), linewidth=1.5, linestyle='-')
+        
+        # 합성 포트폴리오 (굵은 점선)
+        normalized_combined = series["Portfolio_Balance"] / series["Portfolio_Balance"].iloc[0] * init_balance
+        plt.plot(series.index, normalized_combined,
+                label="Combined Portfolio", color="black", linewidth=2.5, linestyle="--")
+        
+        plt.title(f"Equity Curve (Normalized to {init_balance})")
+        plt.xlabel("Date")
+        plt.ylabel("Portfolio Value")
+        plt.legend()
+        plt.grid(alpha=0.3)
+        plt.tight_layout()
+        plt.show()
