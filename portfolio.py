@@ -163,6 +163,7 @@ class Portfolio:
     # * df_ncva 에 랭크 데이터가 들어옴.
     def nvca(start_date, end_date, loaded = True):
         df_rank = DB_FinancialStatement.get_ncva_rank_table(loaded)
+        df_rank = df_rank.head(20)
         df = AssetAllocation.calculation_quarter_rank(start_date, end_date, df_rank, 20)
         return df
     
@@ -203,6 +204,7 @@ class Portfolio:
     
     def magic_multify(start_date, end_date, loaded = True):
         df_rank = DB_FinancialStatement.get_ev_ebit_rank_table(loaded)
+        df_rank = df_rank.head(20)
         symbols = list(set(val for val in df_rank.values.ravel() if pd.notna(val)))
         quarter_list = df_rank.columns.to_list()
 
@@ -220,35 +222,40 @@ class Portfolio:
 
     def low_per(start_date, end_date, loaded = True):
         df_rank = DB_FinancialStatement.get_low_per_rank_table(loaded)
-        symbols = list(set(val for val in df_rank.values.ravel() if pd.notna(val)))
-        quarter_list = df_rank.columns.to_list()
+        df = AssetAllocation.calculation_quarter_rank(start_date, end_date, df_rank, 20)
 
-        date_dict = commonHelper.get_date_dict_by_quarter_lazy(quarter_list)
-        date_dict = commonHelper.get_trimmed_date_dict(date_dict, start_date, end_date)
-        date_dict = commonHelper.adjust_start_data_dict_by_quarter(date_dict, quarter_list[0])
-        oldest, latest = commonHelper.get_date_range_from_quarters(date_dict)
+        # df_rank = df_rank.head(20)
+        # symbols = list(set(val for val in df_rank.values.ravel() if pd.notna(val)))
+        # quarter_list = df_rank.columns.to_list()
 
-        df = AssetAllocation.get_stock_data_with_ma(symbols=symbols, start_date=oldest, end_date=latest, mas=[10], type='ma_month', use_db_stock=True)
-        df = AssetAllocation.filter_close_last_month(df)
-        df = AssetAllocation.strategy_quarter_rankV2(df, df_rank, date_dict)
+        # date_dict = commonHelper.get_date_dict_by_quarter_lazy(quarter_list)
+        # date_dict = commonHelper.get_trimmed_date_dict(date_dict, start_date, end_date)
+        # date_dict = commonHelper.adjust_start_data_dict_by_quarter(date_dict, quarter_list[0])
+        # oldest, latest = commonHelper.get_date_range_from_quarters(date_dict)
+
+        # df = AssetAllocation.get_stock_data_with_ma(symbols=symbols, start_date=oldest, end_date=latest, mas=[10], type='ma_month', use_db_stock=True)
+        # df = AssetAllocation.filter_close_last_month(df)
+        # df = AssetAllocation.strategy_quarter_rankV2(df, df_rank, date_dict)
         
         return df
     
 
     def fama_high_return(start_date, end_date, loaded = True):
         df_rank = DB_FinancialStatement.get_fama_high_return_rank_table(loaded)
-        df_rank = df_rank.head(20)
-        symbols = list(set(val for val in df_rank.values.ravel() if pd.notna(val)))
-        quarter_list = df_rank.columns.to_list()
+        df = AssetAllocation.calculation_quarter_rank(start_date, end_date, df_rank, 20)
 
-        date_dict = commonHelper.get_date_dict_by_quarter_lazy(quarter_list)
-        date_dict = commonHelper.get_trimmed_date_dict(date_dict, start_date, end_date)
-        date_dict = commonHelper.adjust_start_data_dict_by_quarter(date_dict, quarter_list[0])
-        oldest, latest = commonHelper.get_date_range_from_quarters(date_dict)
+        # df_rank = df_rank.head(20)
+        # symbols = list(set(val for val in df_rank.values.ravel() if pd.notna(val)))
+        # quarter_list = df_rank.columns.to_list()
 
-        df = AssetAllocation.get_stock_data_with_ma(symbols=symbols, start_date=oldest, end_date=latest, mas=[10], type='ma_month', use_db_stock=True)
-        df = AssetAllocation.filter_close_last_month(df)
-        df = AssetAllocation.strategy_quarter_rankV2(df, df_rank, date_dict)
+        # date_dict = commonHelper.get_date_dict_by_quarter_lazy(quarter_list)
+        # date_dict = commonHelper.get_trimmed_date_dict(date_dict, start_date, end_date)
+        # date_dict = commonHelper.adjust_start_data_dict_by_quarter(date_dict, quarter_list[0])
+        # oldest, latest = commonHelper.get_date_range_from_quarters(date_dict)
+
+        # df = AssetAllocation.get_stock_data_with_ma(symbols=symbols, start_date=oldest, end_date=latest, mas=[10], type='ma_month', use_db_stock=True)
+        # df = AssetAllocation.filter_close_last_month(df)
+        # df = AssetAllocation.strategy_quarter_rankV2(df, df_rank, date_dict)
 
         return df
 

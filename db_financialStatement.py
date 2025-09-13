@@ -1742,12 +1742,7 @@ class DB_FinancialStatement(MySQLConnector):
 
         csv_file_name = 'f_score_rank_quarter.csv'
 
-        if loaded:
-            result_df = pd.read_csv(csv_file_name)
-            result_df = result_df.drop(columns=['Unnamed: 0'], errors='ignore')
-            return result_df
-        
-        else:
+        def run_to_script():
             with DB_FinancialStatement() as fs:
                 symbols = fs.get_symbol_list_with_filter(2021)
                 df_year = fs.get_fs_all(symbols, EDateType.YEAR)
@@ -1888,6 +1883,13 @@ class DB_FinancialStatement(MySQLConnector):
 
             return df
         
+        return ch.load_and_save_csv(
+            folder_path='stocks',
+            file_name=csv_file_name,
+            is_load= loaded,
+            action = run_to_script
+        )
+        
     @staticmethod
     def stuff_df_nan(some_dict:dict) -> dict:
         
@@ -1936,50 +1938,55 @@ class DB_FinancialStatement(MySQLConnector):
         
         if csv_file_name is None:
             csv_file_name = f"{label}_rank.csv"
-        
-        if loaded:
-            return pd.read_csv(csv_file_name)
-        
-        # DB에서 데이터 가져오기
-        with DB_FinancialStatement() as fs:
-            symbols = fs.get_symbol_list_with_filter(2022)
-            df = fs.get_fs_all(symbols, commonHelper.EDateType.QUARTER)
-            df = fs.get_fs_data(df)
-            df = DB_FinancialStatement.add_quarter_column(df)
-            
-            # 전처리 (새 컬럼 추가 등)
-            if preprocess_func:
-                df = preprocess_func(df)
-            
-            # 필터링
-            if filter_func:
-                df = filter_func(df)
-            
-            # 정렬용 컬럼
-            col_name = f"rank_{label}"
-            df[col_name] = rank_key(df) if rank_key else np.nan
-            
-            # 분기별 그룹화 & 랭킹
-            dict_rank = {}
-            grouped = df.groupby('Quarter')
-            max_len = 0
-            for q, group in grouped:
-                group = group.sort_values(by=col_name, ascending=ascending)
-                group = group[['Date','Quarter','Symbol',col_name]]
-                symbol_list = group['Symbol'].tolist()
-                dict_rank[q] = symbol_list
-                max_len = max(max_len, len(symbol_list))
-                display(group.head(10))
-            
-            # 길이 맞추기
-            for key, value in dict_rank.items():
-                dict_rank[key] += [np.nan] * (max_len - len(value))
-            
-            df_rank = pd.DataFrame(dict_rank)
-            df_rank = df_rank.head(top_n)
-            df_rank.to_csv(csv_file_name, index=False)
-            
-        return df_rank
+
+        # 랭킹데이터 필터링 
+        def run_to_script():  
+            # DB에서 데이터 가져오기
+            with DB_FinancialStatement() as fs:
+                symbols = fs.get_symbol_list_with_filter(2022)
+                df = fs.get_fs_all(symbols, commonHelper.EDateType.QUARTER)
+                df = fs.get_fs_data(df)
+                df = DB_FinancialStatement.add_quarter_column(df)
+                
+                # 전처리 (새 컬럼 추가 등)
+                if preprocess_func:
+                    df = preprocess_func(df)
+                
+                # 필터링
+                if filter_func:
+                    df = filter_func(df)
+                
+                # 정렬용 컬럼
+                col_name = f"rank_{label}"
+                df[col_name] = rank_key(df) if rank_key else np.nan
+                
+                # 분기별 그룹화 & 랭킹
+                dict_rank = {}
+                grouped = df.groupby('Quarter')
+                max_len = 0
+                for q, group in grouped:
+                    group = group.sort_values(by=col_name, ascending=ascending)
+                    group = group[['Date','Quarter','Symbol',col_name]]
+                    symbol_list = group['Symbol'].tolist()
+                    dict_rank[q] = symbol_list
+                    max_len = max(max_len, len(symbol_list))
+                
+                # 길이 맞추기
+                for key, value in dict_rank.items():
+                    dict_rank[key] += [np.nan] * (max_len - len(value))
+                
+                df_rank = pd.DataFrame(dict_rank)
+                df_rank = df_rank.head(top_n)
+                df_rank.to_csv(csv_file_name, index=False)
+                
+            return df_rank
+           
+        return ch.load_and_save_csv(
+            folder_path='stocks',
+            file_name=csv_file_name,
+            is_load= loaded,
+            action = run_to_script
+        )
     
 
             
@@ -1992,56 +1999,60 @@ class DB_FinancialStatement(MySQLConnector):
     #  - 기업이 청산되고 남은 현금자산이 시총보다 높다는 이야기
     #  - 즉, 주식시장에서 기업의 가치를 그 기업의 자산보다 낮게 측정했다는 뜻. 
     @staticmethod
-    def get_ncva_rank_table(loaded=True) -> pd.DataFrame:
+    def get_ncva_rank_table(is_load=True) -> pd.DataFrame:
         df_rank = DB_FinancialStatement.get_rank_table_quarter(
             label="Origin_NVAC",
             filter_func=lambda df: df[(df['LiquidationValue'] > df['MarketCap']) & (df['NetIncome'] > 0)],
             rank_key=lambda df: df['LiquidationValue'] / df['MarketCap'],
             ascending=False,
-            top_n=20,
-            loaded=loaded
+            top_n=30,
+            loaded=is_load
         )
         return df_rank
 
+    # 슈퍼가치 
     def get_super_value_rank_table(loaded=True) -> pd.DataFrame:
         csv_file_name = 'super_value_rank.csv'
-        if loaded:
-            result_df = pd.read_csv(csv_file_name)
-            result_df = result_df.drop(columns=['Unnamed: 0'], errors='ignore')
-            return result_df
-        else:
+
+        def run_to_script():
             df_quarter = DB_FinancialStatement.get_fs_data_static(min_year=2022)
             dict_quarter = DB_FinancialStatement.get_rankings_avg_to_dict(df_quarter=df_quarter, selected_metrics=['PER','PBR','PCR','PSR'])
             dict_quarter = DB_FinancialStatement.stuff_df_nan(dict_quarter)
             df = pd.DataFrame(dict_quarter)
-            df.to_csv(csv_file_name)
             return df
+        
+        return ch.load_and_save_csv(
+            folder_path='stocks',
+            file_name=csv_file_name,
+            is_load= loaded,
+            action = run_to_script
+        )
     
 
+    # 마법공식
     def get_new_magic_rank_table(loaded=True) -> pd.DataFrame:
         csv_file_name = 'new_magic_rank.csv'
-        if loaded:
-            result_df = pd.read_csv(csv_file_name)
-            result_df = result_df.drop(columns=['Unnamed: 0'], errors='ignore')
-            return result_df
-        else:
+
+        def run_to_script():
             df_quarter = DB_FinancialStatement.get_fs_data_static(min_year=2022)
             dict_quarter = DB_FinancialStatement.get_rankings_avg_to_dict(df_quarter=df_quarter, selected_metrics=['PBR','GP/A'])
             dict_quarter = DB_FinancialStatement.stuff_df_nan(dict_quarter)
             df = pd.DataFrame(dict_quarter)
-            df.to_csv(csv_file_name)
             return df
         
-    
+        return ch.load_and_save_csv(
+            folder_path='stocks',
+            file_name=csv_file_name,
+            is_load= loaded,
+            action = run_to_script
+        )
+        
+
     def get_f_score_rank_table(loaded = True) -> pd.DataFrame:
 
         csv_file_name = 'f_score_with_per.csv'
-        if loaded:
-            result_df = pd.read_csv(csv_file_name)
-            result_df = result_df.drop(columns=['Unnamed: 0'], errors='ignore')
-            return result_df
-
-        else:
+        
+        def run_to_script():
             df_rank = DB_FinancialStatement.get_f_score_rank_quarter_table(False)
             symbols = pd.unique(df_rank.values.ravel())
             symbols = [s for s in symbols if pd.notna(s)]
@@ -2068,22 +2079,24 @@ class DB_FinancialStatement(MySQLConnector):
                 max_len = max(len(v) for v in dict_df.values())
                 padded = {k: v + [None] * (max_len - len(v)) for k, v in dict_df.items()}
                 df = pd.DataFrame(padded)
-                df = df.head(20)
-                df.to_csv(csv_file_name, index=False)
             
             return df
+   
+        return ch.load_and_save_csv(
+            folder_path='stocks',
+            file_name=csv_file_name,
+            is_load= loaded,
+            action = run_to_script
+        )
         
 
     def get_market_cap_rank_table(loaded = True):
         
         csv_file_name = 'market_cap_rank.csv'
-        if loaded:
-            df = pd.read_csv(csv_file_name)
-            return df
         
-        else:
+        def run_to_script():
             with DB_FinancialStatement() as fs:
-                symbols = fs.get_symbol_list_with_filter(2021)
+                symbols = fs.get_symbol_list_with_filter(2022)
                 df = fs.get_fs_all(symbols, commonHelper.EDateType.QUARTER)
                 df = fs.get_value_data(df)
                 df = DB_FinancialStatement.add_quarter_column(df)
@@ -2103,10 +2116,15 @@ class DB_FinancialStatement(MySQLConnector):
                     value.extend([np.nan]*(max_len - len(value)))
 
                 df = pd.DataFrame(grouped_dict)
-                df = df.head(500)
-                df.to_csv(csv_file_name, index= False)
 
             return df
+        
+        return ch.load_and_save_csv(
+            folder_path='stocks',
+            file_name=csv_file_name,
+            is_load= loaded,
+            action = run_to_script
+        )
         
 
     # EV_EBIT 전략
@@ -2120,7 +2138,6 @@ class DB_FinancialStatement(MySQLConnector):
             top_n=20,
             loaded=loaded
         )
-
         return df_ev_ebit
         
     # 저 피비알 전략
@@ -2141,12 +2158,7 @@ class DB_FinancialStatement(MySQLConnector):
     def get_fama_high_return_rank_table(loaded = True):
         csv_file_name = 'fama_high_return.csv'
 
-        if loaded:
-            result_df = pd.read_csv(csv_file_name)
-            result_df = result_df.drop(columns=['Unnamed: 0'], errors='ignore')
-            return result_df
-
-        else:
+        def run_to_script():
             with DB_FinancialStatement() as fs:
                 symbols = fs.get_symbol_list_with_filter(2021)
                 df = fs.get_fs_all(symbols, commonHelper.EDateType.QUARTER)
@@ -2179,18 +2191,21 @@ class DB_FinancialStatement(MySQLConnector):
 
                 dict_rank = DB_FinancialStatement.stuff_df_nan(dict_rank)
                 df = pd.DataFrame(dict_rank)
-                df.to_csv(csv_file_name)
                 return df
+            
+        return ch.load_and_save_csv(
+            folder_path='stocks',
+            file_name=csv_file_name,
+            is_load= loaded,
+            action = run_to_script
+        )
             
 
     
     def get_income_momentum_rank_table(loaded = True):
         csv_file_name = 'income_momentum_rank.csv'
-        if loaded:
-            result_df = pd.read_csv(csv_file_name)
-            result_df = result_df.drop(columns=['Unnamed: 0'], errors='ignore')
-            return result_df
-        else:
+
+        def run_to_script():
             with DB_FinancialStatement() as fs:
                 symbols = fs.get_symbol_list_with_filter(2022)
                 df_year = fs.get_fs_all(symbols, commonHelper.EDateType.YEAR)
@@ -2244,8 +2259,14 @@ class DB_FinancialStatement(MySQLConnector):
 
                 dict_rank = DB_FinancialStatement.stuff_df_nan(dict_rank)
                 df = pd.DataFrame(dict_rank)
-                df.to_csv(csv_file_name)
                 return df
+        
+        return ch.load_and_save_csv(
+            folder_path='stocks',
+            file_name=csv_file_name,
+            is_load= loaded,
+            action = run_to_script
+        )
             
 
     # 업그레이드 nvca 전략
@@ -2266,11 +2287,8 @@ class DB_FinancialStatement(MySQLConnector):
     # 업그레이드 슈퍼가치 전략
     def get_upgrade_super_value_rank_table(loaded=True):
         csv_file_name = 'upgrade_super_value.csv'
-        if loaded:
-            result_df = pd.read_csv(csv_file_name)
-            result_df = result_df.drop(columns=['Unnamed: 0'], errors='ignore')
-            return result_df
-        else:
+        
+        def run_to_script():
             with DB_FinancialStatement() as fs:
                 symbols = fs.get_symbol_list_with_filter(2022)
                 df_quarter = fs.get_fs_all(symbols, commonHelper.EDateType.QUARTER)
@@ -2311,17 +2329,20 @@ class DB_FinancialStatement(MySQLConnector):
                     
                 dict_rank = DB_FinancialStatement.stuff_df_nan(dict_rank)
                 df = pd.DataFrame(dict_rank)
-                df.to_csv(csv_file_name)
             return df
+        
+        return ch.load_and_save_csv(
+            folder_path='stocks',
+            file_name=csv_file_name,
+            is_load= loaded,
+            action = run_to_script
+        )
         
 
     def get_super_quality_rank_table(loaded=True):
         csv_file_name = 'super_quality_rank.csv'
-        if loaded:
-                result_df = pd.read_csv(csv_file_name)
-                result_df = result_df.drop(columns=['Unnamed: 0'], errors='ignore')
-                return result_df
-        else:
+
+        def run_to_script():
             with DB_FinancialStatement() as fs:
                 symbol = fs.get_symbol_list_with_filter(2022)
                 df = fs.get_fs_all(symbol, commonHelper.EDateType.YEAR)
@@ -2384,17 +2405,20 @@ class DB_FinancialStatement(MySQLConnector):
                 
                 dict_quarter = DB_FinancialStatement.stuff_df_nan(dict_quarter)
                 df = pd.DataFrame(dict_quarter)
-                df.to_csv(csv_file_name)
                 return df
+        
+        return ch.load_and_save_csv(
+            folder_path='stocks',
+            file_name=csv_file_name,
+            is_load= loaded,
+            action = run_to_script
+        )
             
 
     def get_fama_last_weapon_rank_table(loaded = True):
         csv_file_name = 'fama_last_weapon.csv'
-        if loaded:
-                result_df = pd.read_csv(csv_file_name)
-                result_df = result_df.drop(columns=['Unnamed: 0'], errors='ignore')
-                return result_df
-        else:
+        
+        def run_to_script():
             with DB_FinancialStatement() as fs:
                 symbols = fs.get_symbol_list_with_filter(2022)
                 # symbols = symbols[:100]
@@ -2440,8 +2464,14 @@ class DB_FinancialStatement(MySQLConnector):
 
                 dict_rank = DB_FinancialStatement.stuff_df_nan(dict_rank)
                 df = pd.DataFrame(dict_rank)
-                df.to_csv(csv_file_name)
                 return df
+                  
+        return ch.load_and_save_csv(
+            folder_path='stocks',
+            file_name=csv_file_name,
+            is_load= loaded,
+            action = run_to_script
+        )
             
 
 

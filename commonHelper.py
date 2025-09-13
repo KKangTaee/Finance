@@ -1,7 +1,9 @@
 from enum import Enum
 from datetime import datetime, timedelta
-import pandas as pd
 from matplotlib.dates import relativedelta
+
+import pandas as pd
+import os
 
 # Enum문
 
@@ -574,3 +576,22 @@ def adjust_start_data_dict_by_quarter(date_dict: dict, first_quarter: list) -> d
     date_dict[first_quarter] = [new_first_start, first_end]
 
     return date_dict
+
+
+
+# CSV파일로드 및 저장
+def load_and_save_csv(folder_path:str, file_name:str, is_load:bool, action):
+    if not callable(action):
+        raise TypeError("action은 함수(람다 포함)여야 합니다!")
+
+    file_path = os.path.join(folder_path, file_name)
+
+    if is_load:
+        return pd.read_csv(file_path)
+    else:
+        df = action()
+        # 폴더 생성 (존재하지 않아도 에러 안 나게)
+        os.makedirs(folder_path, exist_ok=True)
+        df.to_csv(file_path, index=False)
+        print(f"{file_path} 생성 완료")
+        return df
