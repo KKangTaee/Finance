@@ -1,14 +1,17 @@
 from copyreg import dispatch_table
 from unittest import result
-import pandas as pd
-import numpy as np
 from sklearn.preprocessing import StandardScaler
-
 from IPython.display import display
-import assetAllocation
 from mysqlConnecter import MySQLConnector
 from commonHelper import EDateType, DBName
 from assetAllocation import AssetAllocation
+
+import pandas as pd
+import numpy as np
+import assetAllocation
+import mplfinance as mpf
+import plotly.graph_objects as go
+import yfinance as yf
 
 
 class DB_Stock(MySQLConnector):
@@ -419,3 +422,102 @@ class DB_Stock(MySQLConnector):
         missing_symbols = [symbol for symbol in symbols if symbol not in existing_symbols]
 
         return missing_symbols
+    
+
+
+    #차트 보기
+    @staticmethod
+    def plot_candlestick_interactive(ticker, start=None, end=None, period=None, freq="D", ma_windows=None):
+        df = yf.download(
+            ticker, start=start, end=end, period=period, interval="1d", group_by="column"
+        )
+
+        if df.empty:
+            raise ValueError("데이터를 불러오지 못했습니다. 기간/티커를 확인하세요.")
+
+        df.columns = df.columns.get_level_values(0)
+
+        # 월봉 변환
+        if freq == "M":
+            df = df.resample("M").agg({
+                "Open": "first",
+                "High": "max",
+                "Low": "min",
+                "Close": "last",
+                "Volume": "sum"
+            })
+
+        df = df.reset_index()
+        df.columns.name = None
+        df = df.dropna()
+
+        fig = go.Figure()
+
+        # 캔들차트 추가
+        fig.add_trace(go.Candlestick(
+            x=df['Date'],
+            open=df['Open'],
+            high=df['High'],
+            low=df['Low'],
+            close=df['Close'],
+            name="Candlestick"
+        ))
+
+        # 이동평균선 + Crossovers
+        if ma_windows:
+            for window in ma_windows:
+                ma_col = f"MA{window}"
+                df[ma_col] = df["Close"].rolling(window=window).mean()
+
+                # 이동평균선 라인 추가
+                fig.add_trace(go.Scatter(
+                    x=df['Date'],
+                    y=df[ma_col],
+                    mode="lines",
+                    line=dict(width=1.5),
+                    name=f"{ma_col}{'D' if freq=='D' else 'M'}"
+                ))
+
+                # 교차 지점 계산
+                cross_x, cross_y, cross_symbol, cross_color = [], [], [], []
+                prev_diff = df["Close"].iloc[0] - df[ma_col].iloc[0]
+
+                for i in range(1, len(df)):
+                    curr_diff = df["Close"].iloc[i] - df[ma_col].iloc[i]
+                    if pd.notna(curr_diff) and pd.notna(prev_diff):
+                        if prev_diff < 0 and curr_diff > 0:  # 상향 돌파
+                            cross_x.append(df["Date"].iloc[i])
+                            cross_y.append(df["Close"].iloc[i])
+                            cross_symbol.append("triangle-up")
+                            cross_color.append("green")
+                        elif prev_diff > 0 and curr_diff < 0:  # 하향 돌파
+                            cross_x.append(df["Date"].iloc[i])
+                            cross_y.append(df["Close"].iloc[i])
+                            cross_symbol.append("triangle-down")
+                            cross_color.append("red")
+                    prev_diff = curr_diff
+
+                # 교차점 전체를 하나의 trace로 묶기
+                if cross_x:
+                    fig.add_trace(go.Scatter(
+                        x=cross_x,
+                        y=cross_y,
+                        mode="markers",
+                        marker=dict(size=12, color=cross_color, symbol=cross_symbol),
+                        name=f"{ma_col} Crossovers"
+                    ))
+
+        fig.update_layout(
+            title=f"{ticker} {freq} Candlestick with Moving Averages + Crossovers",
+            xaxis_rangeslider_visible=False,
+            yaxis_title="Price",
+            dragmode="pan",
+            hovermode="x"
+        )
+
+        # 마우스 휠 줌 가능
+        fig.show(config={
+            "scrollZoom": True,
+            "displayModeBar": True,
+            "modeBarButtonsToAdd": ["togglehover"]
+        })
