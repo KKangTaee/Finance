@@ -1,0 +1,13 @@
+{
+  "form": "10-Q",
+  "accessionNumber": "0000320193-21-000065",
+  "primaryDocument": "aapl-20210626.htm",
+  "filingDate": "2021-07-28",
+  "cik10": "0000320193",
+  "symbol": "AAPL",
+  "saved_files": [
+    "aapl-20210626.htm"
+  ],
+  "output_dir": "/Users/taehokang/Projects/Finance/edgar_data/AAPL_320193_000032019321000065_10-Q_2021-07-28",
+  "kind": "primary"
+}

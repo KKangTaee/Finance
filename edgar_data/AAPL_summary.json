@@ -1,0 +1,251 @@
+{
+  "results": [
+    {
+      "form": "10-Q",
+      "accessionNumber": "0000320193-25-000073",
+      "primaryDocument": "aapl-20250628.htm",
+      "filingDate": "2025-08-01",
+      "cik10": "0000320193",
+      "symbol": "AAPL",
+      "saved_files": [
+        "aapl-20250628.htm"
+      ],
+      "output_dir": "/Users/taehokang/Projects/Finance/edgar_data/AAPL_320193_000032019325000073_10-Q_2025-08-01",
+      "kind": "primary"
+    },
+    {
+      "form": "10-Q",
+      "accessionNumber": "0000320193-25-000057",
+      "primaryDocument": "aapl-20250329.htm",
+      "filingDate": "2025-05-02",
+      "cik10": "0000320193",
+      "symbol": "AAPL",
+      "saved_files": [
+        "aapl-20250329.htm"
+      ],
+      "output_dir": "/Users/taehokang/Projects/Finance/edgar_data/AAPL_320193_000032019325000057_10-Q_2025-05-02",
+      "kind": "primary"
+    },
+    {
+      "form": "10-Q",
+      "accessionNumber": "0000320193-25-000008",
+      "primaryDocument": "aapl-20241228.htm",
+      "filingDate": "2025-01-31",
+      "cik10": "0000320193",
+      "symbol": "AAPL",
+      "saved_files": [
+        "aapl-20241228.htm"
+      ],
+      "output_dir": "/Users/taehokang/Projects/Finance/edgar_data/AAPL_320193_000032019325000008_10-Q_2025-01-31",
+      "kind": "primary"
+    },
+    {
+      "form": "10-K",
+      "accessionNumber": "0000320193-24-000123",
+      "primaryDocument": "aapl-20240928.htm",
+      "filingDate": "2024-11-01",
+      "cik10": "0000320193",
+      "symbol": "AAPL",
+      "saved_files": [
+        "aapl-20240928.htm"
+      ],
+      "output_dir": "/Users/taehokang/Projects/Finance/edgar_data/AAPL_320193_000032019324000123_10-K_2024-11-01",
+      "kind": "primary"
+    },
+    {
+      "form": "10-Q",
+      "accessionNumber": "0000320193-24-000081",
+      "primaryDocument": "aapl-20240629.htm",
+      "filingDate": "2024-08-02",
+      "cik10": "0000320193",
+      "symbol": "AAPL",
+      "saved_files": [
+        "aapl-20240629.htm"
+      ],
+      "output_dir": "/Users/taehokang/Projects/Finance/edgar_data/AAPL_320193_000032019324000081_10-Q_2024-08-02",
+      "kind": "primary"
+    },
+    {
+      "form": "10-Q",
+      "accessionNumber": "0000320193-24-000069",
+      "primaryDocument": "aapl-20240330.htm",
+      "filingDate": "2024-05-03",
+      "cik10": "0000320193",
+      "symbol": "AAPL",
+      "saved_files": [
+        "aapl-20240330.htm"
+      ],
+      "output_dir": "/Users/taehokang/Projects/Finance/edgar_data/AAPL_320193_000032019324000069_10-Q_2024-05-03",
+      "kind": "primary"
+    },
+    {
+      "form": "10-Q",
+      "accessionNumber": "0000320193-24-000006",
+      "primaryDocument": "aapl-20231230.htm",
+      "filingDate": "2024-02-02",
+      "cik10": "0000320193",
+      "symbol": "AAPL",
+      "saved_files": [
+        "aapl-20231230.htm"
+      ],
+      "output_dir": "/Users/taehokang/Projects/Finance/edgar_data/AAPL_320193_000032019324000006_10-Q_2024-02-02",
+      "kind": "primary"
+    },
+    {
+      "form": "10-K",
+      "accessionNumber": "0000320193-23-000106",
+      "primaryDocument": "aapl-20230930.htm",
+      "filingDate": "2023-11-03",
+      "cik10": "0000320193",
+      "symbol": "AAPL",
+      "saved_files": [
+        "aapl-20230930.htm"
+      ],
+      "output_dir": "/Users/taehokang/Projects/Finance/edgar_data/AAPL_320193_000032019323000106_10-K_2023-11-03",
+      "kind": "primary"
+    },
+    {
+      "form": "10-Q",
+      "accessionNumber": "0000320193-23-000077",
+      "primaryDocument": "aapl-20230701.htm",
+      "filingDate": "2023-08-04",
+      "cik10": "0000320193",
+      "symbol": "AAPL",
+      "saved_files": [
+        "aapl-20230701.htm"
+      ],
+      "output_dir": "/Users/taehokang/Projects/Finance/edgar_data/AAPL_320193_000032019323000077_10-Q_2023-08-04",
+      "kind": "primary"
+    },
+    {
+      "form": "10-Q",
+      "accessionNumber": "0000320193-23-000064",
+      "primaryDocument": "aapl-20230401.htm",
+      "filingDate": "2023-05-05",
+      "cik10": "0000320193",
+      "symbol": "AAPL",
+      "saved_files": [
+        "aapl-20230401.htm"
+      ],
+      "output_dir": "/Users/taehokang/Projects/Finance/edgar_data/AAPL_320193_000032019323000064_10-Q_2023-05-05",
+      "kind": "primary"
+    },
+    {
+      "form": "10-Q",
+      "accessionNumber": "0000320193-23-000006",
+      "primaryDocument": "aapl-20221231.htm",
+      "filingDate": "2023-02-03",
+      "cik10": "0000320193",
+      "symbol": "AAPL",
+      "saved_files": [
+        "aapl-20221231.htm"
+      ],
+      "output_dir": "/Users/taehokang/Projects/Finance/edgar_data/AAPL_320193_000032019323000006_10-Q_2023-02-03",
+      "kind": "primary"
+    },
+    {
+      "form": "10-K",
+      "accessionNumber": "0000320193-22-000108",
+      "primaryDocument": "aapl-20220924.htm",
+      "filingDate": "2022-10-28",
+      "cik10": "0000320193",
+      "symbol": "AAPL",
+      "saved_files": [
+        "aapl-20220924.htm"
+      ],
+      "output_dir": "/Users/taehokang/Projects/Finance/edgar_data/AAPL_320193_000032019322000108_10-K_2022-10-28",
+      "kind": "primary"
+    },
+    {
+      "form": "10-Q",
+      "accessionNumber": "0000320193-22-000070",
+      "primaryDocument": "aapl-20220625.htm",
+      "filingDate": "2022-07-29",
+      "cik10": "0000320193",
+      "symbol": "AAPL",
+      "saved_files": [
+        "aapl-20220625.htm"
+      ],
+      "output_dir": "/Users/taehokang/Projects/Finance/edgar_data/AAPL_320193_000032019322000070_10-Q_2022-07-29",
+      "kind": "primary"
+    },
+    {
+      "form": "10-Q",
+      "accessionNumber": "0000320193-22-000059",
+      "primaryDocument": "aapl-20220326.htm",
+      "filingDate": "2022-04-29",
+      "cik10": "0000320193",
+      "symbol": "AAPL",
+      "saved_files": [
+        "aapl-20220326.htm"
+      ],
+      "output_dir": "/Users/taehokang/Projects/Finance/edgar_data/AAPL_320193_000032019322000059_10-Q_2022-04-29",
+      "kind": "primary"
+    },
+    {
+      "form": "10-Q",
+      "accessionNumber": "0000320193-22-000007",
+      "primaryDocument": "aapl-20211225.htm",
+      "filingDate": "2022-01-28",
+      "cik10": "0000320193",
+      "symbol": "AAPL",
+      "saved_files": [
+        "aapl-20211225.htm"
+      ],
+      "output_dir": "/Users/taehokang/Projects/Finance/edgar_data/AAPL_320193_000032019322000007_10-Q_2022-01-28",
+      "kind": "primary"
+    },
+    {
+      "form": "10-K",
+      "accessionNumber": "0000320193-21-000105",
+      "primaryDocument": "aapl-20210925.htm",
+      "filingDate": "2021-10-29",
+      "cik10": "0000320193",
+      "symbol": "AAPL",
+      "saved_files": [
+        "aapl-20210925.htm"
+      ],
+      "output_dir": "/Users/taehokang/Projects/Finance/edgar_data/AAPL_320193_000032019321000105_10-K_2021-10-29",
+      "kind": "primary"
+    },
+    {
+      "form": "10-Q",
+      "accessionNumber": "0000320193-21-000065",
+      "primaryDocument": "aapl-20210626.htm",
+      "filingDate": "2021-07-28",
+      "cik10": "0000320193",
+      "symbol": "AAPL",
+      "saved_files": [
+        "aapl-20210626.htm"
+      ],
+      "output_dir": "/Users/taehokang/Projects/Finance/edgar_data/AAPL_320193_000032019321000065_10-Q_2021-07-28",
+      "kind": "primary"
+    },
+    {
+      "form": "10-Q",
+      "accessionNumber": "0000320193-21-000056",
+      "primaryDocument": "aapl-20210327.htm",
+      "filingDate": "2021-04-29",
+      "cik10": "0000320193",
+      "symbol": "AAPL",
+      "saved_files": [
+        "aapl-20210327.htm"
+      ],
+      "output_dir": "/Users/taehokang/Projects/Finance/edgar_data/AAPL_320193_000032019321000056_10-Q_2021-04-29",
+      "kind": "primary"
+    },
+    {
+      "form": "10-Q",
+      "accessionNumber": "0000320193-21-000010",
+      "primaryDocument": "aapl-20201226.htm",
+      "filingDate": "2021-01-28",
+      "cik10": "0000320193",
+      "symbol": "AAPL",
+      "saved_files": [
+        "aapl-20201226.htm"
+      ],
+      "output_dir": "/Users/taehokang/Projects/Finance/edgar_data/AAPL_320193_000032019321000010_10-Q_2021-01-28",
+      "kind": "primary"
+    }
+  ]
+}
