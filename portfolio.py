@@ -97,6 +97,7 @@ class Portfolio:
 
     # 공격형 TAA전략
     def gtaa3(start_date, end_date):
+        # 정석이 13개로 하는거긴한데, 수익률이 훨씬 안좋다.
         # symbols = ['SPY','IWD','IWM', 'IWN','MTUM','EFA','TLT','IEF','LQD','DBC','VNQ','BWX','GLD']
         symbols = ['SPY','IWM','MTUM','EFA','TLT','IEF','LQD','DBC','VNQ','GLD']
         date_obj = datetime.strptime(start_date, '%Y-%m-%d')
@@ -105,7 +106,6 @@ class Portfolio:
         df = AssetAllocation.filter_close_last_month(df)
         df = AssetAllocation.strategy_taa(df, 3, [1,3,6,12])
         return df
-
 
     def original_dual_momentum(start_date, end_date):
         symbols = ['SPY','EFA','AGG','BIL']
